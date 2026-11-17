@@ -1,0 +1,150 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ai-marking-system
+
+  # ==================== 数据源（MyBatis-Plus 依赖它） ====================
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/ai_marking?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: root
+    hikari:
+      # 连接池最大/最小连接数，按需调整
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  # ==================== 文件上传 ====================
+  # Spring Boot 默认单文件 1MB / 单请求 10MB，必然不够用：
+  # - 后续阶段题库/成绩的 EasyExcel 批量导入
+  # - 纸质试卷模式的答题卡扫描件（图片）上传
+  # 故在此显式调大，按需调整
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 100MB
+
+  # ==================== Redis ====================
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      # 没有密码时留空即可
+      password:
+      # 连接超时时间
+      timeout: 5s
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  # ==================== RabbitMQ（模块4：异步AI阅卷 / OCR识别） ====================
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    # guest 账号默认只允许 localhost 连接；远程部署需在 RabbitMQ 中新建账号并授权该 vhost
+    virtual-host: /
+    connection-timeout: 5s
+    # ---- 生产者：发布确认，保证"消息确实到达交换机/队列" ----
+    # correlated：异步回调确认（ConfirmCallback），消息没到交换机会收到 nack
+    publisher-confirm-type: correlated
+    # 交换机路由不到任何队列时，把消息退回给生产者（ReturnCallback），否则消息被静默丢弃
+    publisher-returns: true
+    template:
+      # 与 publisher-returns 配合：路由失败时退回而不是直接丢弃
+      mandatory: true
+    # ---- 消费者：手动 ack + 限流 + 失败不重新入队 ----
+    listener:
+      simple:
+        # manual：业务处理成功才 ack，异常时 nack；避免 auto 模式下"拿到消息就算成功"导致任务丢失
+        acknowledge-mode: manual
+        # 每个消费者一次最多预取 5 条，防止慢消费（AI调用耗时长）时消息全部堆积在单个消费者本地
+        prefetch: 5
+        # 并发消费者数量区间，AI 阅卷耗时较长，不宜开太大，按需调整
+        concurrency: 2
+        max-concurrency: 5
+        # 消费失败（nack/reject）时不重新入队，直接按队列的死信配置转发到死信交换机；
+        # 重试次数由业务侧 mark_task.retry_count 控制，避免异常消息在队列里无限循环
+        default-requeue-rejected: false
+
+# ==================== LLM（模块4：AI阅卷 / OCR后处理 / Prompt模板） ====================
+# 当前默认使用 DeepSeek 官方 API，后续若接入智谱/通义等，只需调整 provider 标识与 api-url，
+# DeepSeekLlmUtil.chat() 的签名完全不变，业务侧无需改代码。
+llm:
+  # 厂商标识：deepseek / zhipu / qwen...，仅作日志与异常区分，不影响逻辑
+  provider: deepseek
+  # API 端点：DeepSeek Chat Completions 标准地址
+  api-url: https://api.deepseek.com/chat/completions
+  # 默认模型名：deepseek-chat（V3），可按需换 deepseek-reasoner（R1 推理模型）
+  model: deepseek-chat
+  # API Key：**生产环境务必用环境变量覆盖，示例：-Dllm.api-key=${DEEPSEEK_API_KEY}**
+  # 提交到 Git 前请清空或替换为空字符串；本地开发用占位值（不真实调用时没问题）
+  api-key:
+
+# ==================== JWT ====================
+jwt:
+  # HS256 要求密钥至少 32 字节；生产环境务必通过环境变量覆盖，不要把真实密钥提交到仓库
+  secret: ai-marking-system-jwt-secret-key-2026-please-change-in-production
+  # token 有效期，单位毫秒，当前为 30 分钟（同时作为 Redis 会话的 TTL）
+  expiration: 1800000
+
+# ==================== MyBatis-Plus ====================
+mybatis-plus:
+  # XML 映射文件位置，后续按模块放 mapper 目录即可被自动扫描
+  mapper-locations: classpath*:/mapper/**/*.xml
+  # 实体类包路径，后续各业务模块的 entity 都会被识别（** 支持多级通配）
+  type-aliases-package: com.marking.aimarkingsystem.**.entity
+  configuration:
+    # 数据库下划线字段自动映射到 Java 驼峰属性，如 create_time -> createTime
+    map-underscore-to-camel-case: true
+    # 开发阶段打印执行的 SQL，上线时请删除或改为 NoLoggingImpl
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    banner: false
+    db-config:
+      # 与建表 SQL 中的 BIGINT AUTO_INCREMENT 保持一致
+      id-type: auto
+      # 逻辑删除字段（实体中属性名 delFlag），1 已删除 / 0 未删除
+      logic-delete-field: delFlag
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ==================== MinIO 对象存储 ====================
+minio:
+  # MinIO 服务地址，末尾不要带斜杠；生产环境用环境变量覆盖
+  endpoint: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  # 存放答卷图片/扫描件的桶；首次上传时若不存在会自动创建
+  bucket: ai-marking
+  # 预签名 URL 有效期（秒），默认 1 小时。
+  # 桶保持私有（private）+ 短时效签名直链，即为"防盗链"的核心手段：
+  # 链接过期后无法再访问，也无法被其他站点长期盗用
+  presigned-expiry: 3600
+
+# ==================== Sentinel（本阶段仅预留，全部注释，暂不启用） ====================
+# 用途：模块4 后续阶段对 MQ 消费速率、AI/OCR 下游调用做限流与熔断降级，
+#       防止"班级集中交卷 -> 瞬间几百条阅卷消息 -> 大模型 API 被打爆"。
+# 当前只引入了 sentinel-core / sentinel-annotation-aspectj 两个依赖，
+# 不接入 Sentinel Dashboard 时无需任何 yml 配置，规则可直接用代码（FlowRuleManager）加载。
+#
+# 若后续要接 Dashboard 做可视化管理，再取消下面注释并启动 dashboard：
+# sentinel:
+#   transport:
+#     # Sentinel Dashboard 地址（需单独部署 sentinel-dashboard.jar）
+#     dashboard: localhost:8080
+#     # 本应用与 dashboard 通信的本地端口
+#     port: 8719
+#   # 启动即向 dashboard 注册心跳
+#   eager: true
+#   # 限流规则示例（也可在 dashboard 页面配置，无需写在 yml）：
+#   # - resource: aiMarkConsumer   # @SentinelResource 标注的资源名
+#   #   grade: 1                   # 1 = QPS 限流
+#   #   count: 5                   # 每秒最多 5 次，超出部分排队或降级
