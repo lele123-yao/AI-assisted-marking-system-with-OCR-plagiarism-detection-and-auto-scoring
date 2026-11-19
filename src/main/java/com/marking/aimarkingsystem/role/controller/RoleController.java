@@ -1,5 +1,6 @@
 package com.marking.aimarkingsystem.role.controller;
 
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.Result;
 import com.marking.aimarkingsystem.role.dto.RoleDTO;
@@ -43,6 +44,7 @@ public class RoleController {
     }
 
     @Operation(summary = "新增角色", description = "角色编码全局唯一，编码用于程序判断，名称用于展示")
+    @OperationLog(module = "角色管理", action = "新增角色")
     @RequiresPermission("ROLE_ADMIN")
     @PostMapping
     public Result<Long> createRole(@Valid @RequestBody RoleDTO dto) {
@@ -50,6 +52,7 @@ public class RoleController {
     }
 
     @Operation(summary = "修改角色", description = "修改角色编码时同样会校验唯一性")
+    @OperationLog(module = "角色管理", action = "修改角色")
     @RequiresPermission("ROLE_ADMIN")
     @PutMapping("/{id}")
     public Result<Void> updateRole(
@@ -60,6 +63,7 @@ public class RoleController {
     }
 
     @Operation(summary = "删除角色", description = "角色仍被用户绑定时拒绝删除，需先解除关联")
+    @OperationLog(module = "角色管理", action = "删除角色")
     @RequiresPermission("ROLE_ADMIN")
     @DeleteMapping("/{id}")
     public Result<Void> deleteRole(@Parameter(description = "角色ID") @PathVariable Long id) {

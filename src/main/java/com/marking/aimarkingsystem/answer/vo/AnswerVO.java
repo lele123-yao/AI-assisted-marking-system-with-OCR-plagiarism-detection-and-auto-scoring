@@ -63,6 +63,32 @@ public class AnswerVO implements Serializable {
     @Schema(description = "最终分数", example = "33.0")
     private BigDecimal finalScore;
 
+    // ==================== 成绩复核（模块6） ====================
+
+    @Schema(description = "复核状态：0 待复核，1 复核通过，2 已改分，3 复核驳回", example = "1")
+    private Integer reviewStatus;
+
+    @Schema(description = "复核状态文案", example = "复核通过")
+    private String reviewStatusDesc;
+
+    @Schema(description = "复核人ID", example = "5")
+    private Long reviewerId;
+
+    @Schema(description = "复核人姓名", example = "王老师")
+    private String reviewerName;
+
+    @Schema(description = "复核时间")
+    private LocalDateTime reviewTime;
+
+    @Schema(description = "复核意见", example = "第2题评分偏高，已调整为12分")
+    private String reviewRemark;
+
+    @Schema(description = "最终分与AI参考分的差值，正数为上调、负数为下调", example = "1.00")
+    private BigDecimal scoreDiff;
+
+    @Schema(description = "是否在AI参考分基础上改过分", example = "true")
+    private Boolean scoreModified;
+
     @Schema(description = "阅卷状态：0 待处理，1 排队中，2 AI阅卷中，3 已完成，4 阅卷失败", example = "3")
     private Integer markingStatus;
 

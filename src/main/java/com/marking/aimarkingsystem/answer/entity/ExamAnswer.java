@@ -72,6 +72,12 @@ public class ExamAnswer implements Serializable {
     /** OCR识别出的答卷全文，仅纸质扫描有值 */
     private String ocrText;
 
+    /**
+     * SimHash 64 位指纹（16 位十六进制小写字符串），线上作答与 OCR 文本统一生成。
+     * 为空表示尚未生成（未提交、未 OCR 或文本过短无法生成）。
+     */
+    private String simHash;
+
     /** 答卷/试卷扫描图片在MinIO中的对象键（非完整URL），仅纸质扫描有值 */
     private String paperImgUrl;
 

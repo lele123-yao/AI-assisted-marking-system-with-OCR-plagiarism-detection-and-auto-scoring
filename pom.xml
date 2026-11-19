@@ -132,6 +132,17 @@
             <version>3.3.3</version>
         </dependency>
 
+        <!-- ========== Apache POI（学情报告 PPT 生成：XMLSlideShow / XSLFSlide） ========== -->
+        <!-- 说明：easyexcel 3.3.3 已传递引入 poi-ooxml 4.1.2，这里显式声明是为了
+             表明直接使用意图（PPT 的 XSLF API 就在 poi-ooxml 中），版本与 EasyExcel
+             传递版本保持一致，避免 Excel 导出与 PPT 生成使用两套 POI 产生冲突。
+             若后续要升级 POI 5.x，需与 easyexcel 一起升级并回归 Excel 导入导出。 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>4.1.2</version>
+        </dependency>
+
         <!-- ========== MinIO（答卷图片、纸质扫描件等对象存储） ========== -->
         <dependency>
             <groupId>io.minio</groupId>

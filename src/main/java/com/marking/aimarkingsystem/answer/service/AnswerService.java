@@ -13,6 +13,7 @@ import com.marking.aimarkingsystem.paper.entity.ExamPaper;
 import com.marking.aimarkingsystem.paper.mapper.ExamPaperMapper;
 import com.marking.aimarkingsystem.paper.service.PaperService;
 import com.marking.aimarkingsystem.mark.service.MarkTaskProducerService;
+import com.marking.aimarkingsystem.plagiarism.service.PlagiarismService;
 import com.marking.aimarkingsystem.user.entity.User;
 import com.marking.aimarkingsystem.user.mapper.UserMapper;
 import org.slf4j.Logger;
@@ -90,18 +91,22 @@ public class AnswerService {
 
     private final MarkTaskProducerService markTaskProducerService;
 
+    private final PlagiarismService plagiarismService;
+
     public AnswerService(ExamAnswerMapper examAnswerMapper,
                          ExamPaperMapper examPaperMapper,
                          UserMapper userMapper,
                          RedisUtil redisUtil,
                          MinioUtil minioUtil,
-                         MarkTaskProducerService markTaskProducerService) {
+                         MarkTaskProducerService markTaskProducerService,
+                         PlagiarismService plagiarismService) {
         this.examAnswerMapper = examAnswerMapper;
         this.examPaperMapper = examPaperMapper;
         this.userMapper = userMapper;
         this.redisUtil = redisUtil;
         this.minioUtil = minioUtil;
         this.markTaskProducerService = markTaskProducerService;
+        this.plagiarismService = plagiarismService;
     }
 
     /**
@@ -157,6 +162,10 @@ public class AnswerService {
             answer.setMarkingStatus(MARKING_STATUS_PENDING);
             answer.setSubmitTime(LocalDateTime.now());
             examAnswerMapper.insert(answer);
+
+            // 立即生成查重指纹：AI 阅卷完成后 answerContent 会被逐题得分明细覆盖，
+            // 必须赶在异步任务消费前用学生原始作答算好指纹
+            plagiarismService.generateFingerprintQuietly(answer.getId());
 
             markTaskProducerService.submitAiMark(answer.getId());
             log.info("线上答卷提交成功: answerId={}, paperId={}, studentId={}",

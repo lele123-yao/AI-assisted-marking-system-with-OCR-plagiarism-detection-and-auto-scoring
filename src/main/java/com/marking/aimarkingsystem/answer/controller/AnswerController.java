@@ -2,6 +2,8 @@ package com.marking.aimarkingsystem.answer.controller;
 
 import com.marking.aimarkingsystem.answer.dto.AnswerSubmitDTO;
 import com.marking.aimarkingsystem.answer.service.AnswerService;
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
+import com.marking.aimarkingsystem.common.annotation.RateLimit;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.Result;
 import io.swagger.v3.oas.annotations.Operation;
@@ -42,6 +44,9 @@ public class AnswerController {
     @Operation(summary = "提交线上答卷",
             description = "只保存答卷记录（来源固定 ONLINE，阅卷状态 0 待处理），返回答卷 id；"
                     + "同一学生对同一试卷重复提交会被 Redis 幂等键与数据库查重拦截")
+    @OperationLog(module = "答卷管理", action = "提交线上答卷")
+    @RateLimit(key = "answer:submit", limit = 5, windowSeconds = 60,
+            message = "答卷提交过于频繁，请稍后再试")
     @RequiresPermission("ROLE_STUDENT")
     @PostMapping("/online")
     public Result<Long> submitOnline(@Valid @RequestBody AnswerSubmitDTO dto) {
@@ -51,6 +56,9 @@ public class AnswerController {
     @Operation(summary = "上传答卷附件",
             description = "支持 jpg/jpeg/png/webp/pdf，单文件不超过 20MB；"
                     + "返回 MinIO 对象键（objectKey），请随答卷一起提交，不要自行拼接访问地址")
+    @OperationLog(module = "答卷管理", action = "上传答卷附件", recordParams = false)
+    @RateLimit(key = "answer:upload", limit = 10, windowSeconds = 60,
+            message = "文件上传过于频繁，请稍后再试")
     @RequiresPermission("ROLE_STUDENT")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Result<String> uploadAnswerFile(

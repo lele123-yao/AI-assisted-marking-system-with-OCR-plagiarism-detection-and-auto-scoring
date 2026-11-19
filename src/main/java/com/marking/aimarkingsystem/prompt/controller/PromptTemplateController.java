@@ -1,5 +1,6 @@
 package com.marking.aimarkingsystem.prompt.controller;
 
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.Result;
@@ -48,6 +49,7 @@ public class PromptTemplateController {
 
     @Operation(summary = "新增模板",
             description = "模板编码唯一；userPrompt 必填，支持 {{question}} 等占位符")
+    @OperationLog(module = "提示词模板", action = "新增模板")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PostMapping
     public Result<Long> create(@Valid @RequestBody PromptTemplateSaveDTO dto) {
@@ -56,6 +58,7 @@ public class PromptTemplateController {
 
     @Operation(summary = "编辑模板",
             description = "修改后版本号自动 +1，用于追溯评分口径的历史版本")
+    @OperationLog(module = "提示词模板", action = "编辑模板")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PutMapping("/{id}")
     public Result<Void> update(
@@ -82,6 +85,7 @@ public class PromptTemplateController {
 
     @Operation(summary = "删除模板",
             description = "已被题目引用的模板不允许删除，建议改为停用")
+    @OperationLog(module = "提示词模板", action = "删除模板")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @DeleteMapping("/{id}")
     public Result<Void> delete(@Parameter(description = "模板ID") @PathVariable Long id) {

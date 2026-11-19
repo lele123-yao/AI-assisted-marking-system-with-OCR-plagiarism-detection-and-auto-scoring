@@ -31,3 +31,14 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 日志与本地调试文件 ###
+*.log
+logs/
+*.log.*
+
+### 本地配置（禁止提交密钥/密码） ###
+application-local.yml
+application-local.yaml
+.env
+*.pem

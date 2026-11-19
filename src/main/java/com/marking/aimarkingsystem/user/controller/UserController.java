@@ -1,5 +1,6 @@
 package com.marking.aimarkingsystem.user.controller;
 
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.Result;
@@ -47,6 +48,7 @@ public class UserController {
 
     @Operation(summary = "新增用户",
             description = "密码使用 BCrypt 加密后入库；可通过 roleIds 同时绑定角色，需要管理员权限")
+    @OperationLog(module = "用户管理", action = "新增用户")
     @RequiresPermission("ROLE_ADMIN")
     @PostMapping
     public Result<Long> addUser(@Valid @RequestBody UserAddDTO dto) {
@@ -67,6 +69,7 @@ public class UserController {
 
     @Operation(summary = "启用/禁用用户",
             description = "禁用会同时清除该用户在 Redis 中的登录会话，已签发的 token 立即失效")
+    @OperationLog(module = "用户管理", action = "启用/禁用用户")
     @RequiresPermission("ROLE_ADMIN")
     @PutMapping("/{id}/status")
     public Result<Void> updateStatus(
@@ -78,6 +81,7 @@ public class UserController {
 
     @Operation(summary = "重置密码",
             description = "重置后清除该用户登录会话，用户需使用新密码重新登录")
+    @OperationLog(module = "用户管理", action = "重置密码", recordResult = false)
     @RequiresPermission("ROLE_ADMIN")
     @PutMapping("/{id}/password")
     public Result<Void> resetPassword(
@@ -89,6 +93,7 @@ public class UserController {
 
     @Operation(summary = "给用户分配角色",
             description = "整体覆盖原有角色：传空数组表示清空该用户的全部角色")
+    @OperationLog(module = "用户管理", action = "分配角色")
     @RequiresPermission("ROLE_ADMIN")
     @PutMapping("/{id}/roles")
     public Result<Void> assignRoles(

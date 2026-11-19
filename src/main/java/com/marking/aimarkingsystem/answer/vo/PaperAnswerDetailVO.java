@@ -75,6 +75,32 @@ public class PaperAnswerDetailVO implements Serializable {
     @Schema(description = "教师最终得分，未确认时为空", example = "33.50")
     private BigDecimal teacherFinalScore;
 
+    // ==================== 成绩复核（模块6） ====================
+
+    @Schema(description = "复核状态：0 待复核，1 复核通过，2 已改分，3 复核驳回", example = "1")
+    private Integer reviewStatus;
+
+    @Schema(description = "复核状态文案", example = "复核通过")
+    private String reviewStatusDesc;
+
+    @Schema(description = "复核人ID", example = "5")
+    private Long reviewerId;
+
+    @Schema(description = "复核人姓名", example = "王老师")
+    private String reviewerName;
+
+    @Schema(description = "复核时间")
+    private LocalDateTime reviewTime;
+
+    @Schema(description = "复核意见", example = "第2题评分偏高，已调整为12分")
+    private String reviewRemark;
+
+    @Schema(description = "教师最终分与AI参考分的差值，正数为上调、负数为下调", example = "1.00")
+    private BigDecimal scoreDiff;
+
+    @Schema(description = "是否在AI参考分基础上改过分", example = "true")
+    private Boolean scoreModified;
+
     @Schema(description = "答卷状态：0 待录入，1 OCR识别中，2 AI辅助批改中，3 待教师确认，4 阅卷失败，5 教师已确认归档",
             example = "3")
     private Integer markingStatus;

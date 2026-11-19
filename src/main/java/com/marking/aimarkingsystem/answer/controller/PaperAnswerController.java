@@ -8,6 +8,8 @@ import com.marking.aimarkingsystem.answer.service.PaperAnswerService;
 import com.marking.aimarkingsystem.answer.vo.PaperAnswerDetailVO;
 import com.marking.aimarkingsystem.answer.vo.PaperAnswerListVO;
 import com.marking.aimarkingsystem.answer.vo.RosterImportResultVO;
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
+import com.marking.aimarkingsystem.common.annotation.RateLimit;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.Result;
@@ -61,6 +63,9 @@ public class PaperAnswerController {
     @Operation(summary = "导入考生名单",
             description = "上传 xlsx/xls 名单（列：学号、姓名、班级），为每名考生生成一条 PAPER_SCAN 空白答卷；"
                     + "单行错误只记录失败明细，同一试卷下已存在的学号自动跳过")
+    @OperationLog(module = "纸质答卷", action = "导入考生名单", recordParams = false, maxLength = 2000)
+    @RateLimit(key = "paper:roster:import", limit = 5, windowSeconds = 300,
+            message = "名单导入过于频繁，请稍后再试")
     @RequiresPermission({"ROLE_TEACHER", "ROLE_ADMIN"})
     @PostMapping(value = "/roster/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Result<RosterImportResultVO> importRoster(
@@ -83,6 +88,7 @@ public class PaperAnswerController {
     @Operation(summary = "教师手动录入分数",
             description = "逐题录入得分并提交最终分：每题不得超过该题满分，各题之和必须等于最终分；"
                     + "若最终分与 AI 参考分相同（直接照抄 AI 结果），接口会拒绝")
+    @OperationLog(module = "纸质答卷", action = "教师录入分数")
     @RequiresPermission({"ROLE_TEACHER", "ROLE_ADMIN"})
     @PostMapping("/{answerId}/score")
     public Result<Void> saveTeacherScore(
@@ -97,6 +103,9 @@ public class PaperAnswerController {
     @Operation(summary = "上传答卷扫描图片",
             description = "支持 jpg/jpeg/png/webp/pdf，单文件不超过 20MB；图片存入 MinIO 并绑定到答卷记录；"
                     + "替换图片会清空旧的 OCR 文本与 AI 参考分，需要重新触发识别")
+    @OperationLog(module = "纸质答卷", action = "上传答卷扫描图片", recordParams = false)
+    @RateLimit(key = "paper:image:upload", limit = 10, windowSeconds = 60,
+            message = "图片上传过于频繁，请稍后再试")
     @RequiresPermission({"ROLE_TEACHER", "ROLE_ADMIN"})
     @PostMapping(value = "/image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Result<String> uploadPaperImage(
@@ -109,6 +118,9 @@ public class PaperAnswerController {
     @Operation(summary = "触发OCR识别任务",
             description = "校验答卷已有扫描图片后登记 OCR 任务并把状态推进到 1（OCR识别中）；"
                     + "重复触发会被状态与 Redis 锁拦截。MQ 投递由模块4实现")
+    @OperationLog(module = "纸质答卷", action = "触发OCR识别")
+    @RateLimit(key = "paper:ocr:trigger", limit = 5, windowSeconds = 60,
+            message = "OCR触发过于频繁，请稍后再试")
     @RequiresPermission({"ROLE_TEACHER", "ROLE_ADMIN"})
     @PostMapping("/{answerId}/ocr")
     public Result<String> triggerOcr(

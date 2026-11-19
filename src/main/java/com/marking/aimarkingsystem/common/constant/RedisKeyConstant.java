@@ -32,4 +32,10 @@ public final class RedisKeyConstant {
      * 防止同一份答卷被并发重复触发 OCR（生成多个任务、调用多次 OCR 服务）。
      */
     public static final String OCR_TRIGGER = "ocr:trigger:";
+
+    /**
+     * 抄袭比对报告缓存：plagiarism:report:{paperId} → 报告 JSON
+     * 有 TTL，答卷或指纹变化后可通过"生成报告"接口强制刷新。
+     */
+    public static final String PLAGIARISM_REPORT = "plagiarism:report:";
 }

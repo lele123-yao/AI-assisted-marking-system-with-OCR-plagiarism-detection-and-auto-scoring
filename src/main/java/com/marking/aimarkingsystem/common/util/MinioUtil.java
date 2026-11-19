@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -106,6 +107,40 @@ public class MinioUtil {
             return objectName;
         } catch (Exception e) {
             log.error("MinIO 上传失败, object={}", objectName, e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "文件上传失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 上传内存中的字节内容（模块8：POI 生成的 PPT 直接以 byte[] 上传，没有本地文件）。
+     *
+     * 与 {@link #upload(MultipartFile, String)} 的区别：入口不是上传文件，而是程序生成的内容，
+     * 因此需要显式传入文件名（用于推断扩展名）与 contentType。
+     *
+     * @param content          文件内容，不能为空
+     * @param directory        对象目录前缀，如 learning-report
+     * @param originalFilename 原始文件名，用于推断扩展名，如 report.pptx
+     * @param contentType      MIME 类型，如 PPT 的 application/vnd.openxmlformats-...
+     * @return 对象键 objectKey
+     */
+    public String uploadBytes(byte[] content, String directory, String originalFilename, String contentType) {
+        if (content == null || content.length == 0) {
+            throw new BusinessException("上传内容不能为空");
+        }
+        ensureBucket();
+
+        String objectName = buildObjectName(directory, originalFilename);
+        try (InputStream in = new ByteArrayInputStream(content)) {
+            client.putObject(PutObjectArgs.builder()
+                    .bucket(bucket)
+                    .object(objectName)
+                    // 已知字节长度，partSize 传 -1 由 SDK 自动决定分片
+                    .stream(in, content.length, -1)
+                    .contentType(resolveContentType(contentType))
+                    .build());
+            return objectName;
+        } catch (Exception e) {
+            log.error("MinIO 字节上传失败, object={}, size={}B", objectName, content.length, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "文件上传失败：" + e.getMessage());
         }
     }

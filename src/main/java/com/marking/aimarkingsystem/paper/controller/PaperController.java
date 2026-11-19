@@ -1,5 +1,6 @@
 package com.marking.aimarkingsystem.paper.controller;
 
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.Result;
@@ -50,6 +51,7 @@ public class PaperController {
 
     @Operation(summary = "新增试卷",
             description = "创建后状态固定为 0（草稿）；status、总分、题数、创建人均由服务端决定")
+    @OperationLog(module = "试卷管理", action = "新增试卷")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PostMapping
     public Result<Long> createPaper(@Valid @RequestBody PaperSaveDTO dto) {
@@ -58,6 +60,7 @@ public class PaperController {
 
     @Operation(summary = "编辑试卷（草稿保存）",
             description = "只有草稿状态可编辑；已录入题目时禁止切换作答模式")
+    @OperationLog(module = "试卷管理", action = "编辑试卷")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PutMapping("/{id}")
     public Result<Void> saveDraft(
@@ -87,6 +90,7 @@ public class PaperController {
     @Operation(summary = "修改试卷状态",
             description = "只允许 0草稿 -> 1待考试 -> 2阅卷中 -> 3已归档 单向前进；"
                     + "进入待考试前校验题目、总分与线上模式的考试时间")
+    @OperationLog(module = "试卷管理", action = "修改试卷状态")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PutMapping("/{id}/status")
     public Result<Void> changeStatus(

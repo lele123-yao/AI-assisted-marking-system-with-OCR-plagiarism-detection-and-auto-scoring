@@ -1,5 +1,6 @@
 package com.marking.aimarkingsystem.course.controller;
 
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.Result;
@@ -48,6 +49,7 @@ public class CourseController {
 
     @Operation(summary = "新增课程",
             description = "课程编码全局唯一；teacherId 必须是已存在的用户；状态不传默认 1（正常）")
+    @OperationLog(module = "课程管理", action = "新增课程")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PostMapping
     public Result<Long> addCourse(@Valid @RequestBody CourseSaveDTO dto) {
@@ -56,6 +58,7 @@ public class CourseController {
 
     @Operation(summary = "编辑课程",
             description = "仅草稿状态无关，课程随时可编辑；课程编码修改后仍需全局唯一")
+    @OperationLog(module = "课程管理", action = "编辑课程")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PutMapping("/{id}")
     public Result<Void> updateCourse(
@@ -80,6 +83,7 @@ public class CourseController {
 
     @Operation(summary = "归档课程",
             description = "课程下仍有未归档试卷时拒绝归档，需先归档全部试卷")
+    @OperationLog(module = "课程管理", action = "归档课程")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PutMapping("/{id}/archive")
     public Result<Void> archiveCourse(@Parameter(description = "课程ID") @PathVariable Long id) {

@@ -9,7 +9,9 @@ import com.marking.aimarkingsystem.answer.mapper.ExamAnswerMapper;
 import com.marking.aimarkingsystem.mark.entity.MarkTask;
 import com.marking.aimarkingsystem.mark.mapper.MarkTaskMapper;
 import com.marking.aimarkingsystem.mark.service.MarkTaskProducerService;
+import com.marking.aimarkingsystem.plagiarism.service.PlagiarismService;
 import com.marking.aimarkingsystem.common.util.MinioUtil;
+import com.marking.aimarkingsystem.common.util.RedisDistributedLock;
 import com.rabbitmq.client.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,18 +38,30 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
 
     private static final Logger log = LoggerFactory.getLogger(OcrConsumer.class);
 
+    /** 分布式锁 Key 前缀：同一 OCR taskNo 同一时刻只允许一个消费者处理 */
+    private static final String LOCK_KEY_PREFIX = "lock:mark:ocr:";
+
+    /** 锁租约 5 分钟：OCR 调用 + 自动投递 AI 阅卷任务的最坏耗时 */
+    private static final long LOCK_LEASE_MILLIS = 300_000L;
+
     private final ExamAnswerMapper examAnswerMapper;
     private final MinioUtil minioUtil;
     private final MarkTaskProducerService markTaskProducerService;
+    private final PlagiarismService plagiarismService;
+    private final RedisDistributedLock distributedLock;
 
     public OcrConsumer(MarkTaskMapper markTaskMapper,
                        ExamAnswerMapper examAnswerMapper,
                        MinioUtil minioUtil,
-                       MarkTaskProducerService markTaskProducerService) {
+                       MarkTaskProducerService markTaskProducerService,
+                       PlagiarismService plagiarismService,
+                       RedisDistributedLock distributedLock) {
         super(markTaskMapper);
         this.examAnswerMapper = examAnswerMapper;
         this.minioUtil = minioUtil;
         this.markTaskProducerService = markTaskProducerService;
+        this.plagiarismService = plagiarismService;
+        this.distributedLock = distributedLock;
     }
 
     @RabbitListener(queues = "${mq.ocr.queue:marking.ocr.queue}")
@@ -55,9 +69,21 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
     public void consume(String messageBody, Channel channel, Message message) {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
         MarkTask task = null;
+        String lockKey = null;
+        String lockToken = null;
         try {
             String taskNo = readTaskNo(message);
             log.info("OCR消费者收到消息: taskNo={}", taskNo);
+
+            // ---- 分布式锁占位：同一 taskNo 同一时刻只允许一个实例处理 ----
+            // 与 markProcessingIfIdle 的乐观状态更新互补，防止多实例重复调用 OCR 服务。
+            lockKey = LOCK_KEY_PREFIX + taskNo;
+            lockToken = distributedLock.tryLock(lockKey, LOCK_LEASE_MILLIS);
+            if (lockToken == null) {
+                log.warn("OCR任务已被其他消费者持有锁，跳过重复消费: taskNo={}", taskNo);
+                channel.basicAck(deliveryTag, false);
+                return;
+            }
 
             task = requireTask(taskNo);
             if (isTerminal(task)) {
@@ -90,6 +116,10 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
                     .set(ExamAnswer::getMarkingError, null));
 
             markSuccess(task);
+
+            // OCR 文本已落库，立即生成查重指纹（纸质答卷与线上答卷在同一指纹空间比对）
+            plagiarismService.generateFingerprintQuietly(answer.getId());
+
             ack(channel, deliveryTag, task);
 
             // ---- OCR 完成后自动触发 AI 阅卷 ----
@@ -117,6 +147,11 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
             try {
                 nackToDlq(channel, deliveryTag, task == null ? null : task, reason);
             } catch (IOException ignored) {
+            }
+        } finally {
+            // 成功、失败、幂等跳过都要释放锁；token 校验保证不会误删其他实例的锁
+            if (lockToken != null) {
+                distributedLock.unlock(lockKey, lockToken);
             }
         }
     }

@@ -8,6 +8,7 @@ import com.marking.aimarkingsystem.answer.enums.AnswerSourceEnum;
 import com.marking.aimarkingsystem.answer.enums.AnswerStatusEnum;
 import com.marking.aimarkingsystem.answer.mapper.ExamAnswerMapper;
 import com.marking.aimarkingsystem.common.util.DeepSeekLlmUtil;
+import com.marking.aimarkingsystem.common.util.RedisDistributedLock;
 import com.marking.aimarkingsystem.mark.entity.MarkTask;
 import com.marking.aimarkingsystem.mark.mapper.MarkTaskMapper;
 import com.marking.aimarkingsystem.paper.entity.ExamQuestion;
@@ -57,21 +58,30 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
     /** 大模型返回分数上限：题目满分 * 1.1 允许轻微超分（大模型偶尔会超），超过视作脏数据 */
     private static final BigDecimal MAX_SCORE_FACTOR = new BigDecimal("1.10");
 
+    /** 分布式锁 Key 前缀：同一 taskNo 同一时刻只允许一个消费者处理 */
+    private static final String LOCK_KEY_PREFIX = "lock:mark:ai:";
+
+    /** 锁租约 10 分钟：AI 逐题调用大模型耗时较长，租约必须大于最坏处理时间 */
+    private static final long LOCK_LEASE_MILLIS = 600_000L;
+
     private final ExamAnswerMapper examAnswerMapper;
     private final ExamQuestionMapper examQuestionMapper;
     private final ExamPaperMapper examPaperMapper;
     private final DeepSeekLlmUtil llmUtil;
+    private final RedisDistributedLock distributedLock;
 
     public AiMarkConsumer(MarkTaskMapper markTaskMapper,
                           ExamAnswerMapper examAnswerMapper,
                           ExamQuestionMapper examQuestionMapper,
                           ExamPaperMapper examPaperMapper,
-                          DeepSeekLlmUtil llmUtil) {
+                          DeepSeekLlmUtil llmUtil,
+                          RedisDistributedLock distributedLock) {
         super(markTaskMapper);
         this.examAnswerMapper = examAnswerMapper;
         this.examQuestionMapper = examQuestionMapper;
         this.examPaperMapper = examPaperMapper;
         this.llmUtil = llmUtil;
+        this.distributedLock = distributedLock;
     }
 
     /**
@@ -84,9 +94,23 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
     public void consume(String messageBody, Channel channel, Message message) {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
         MarkTask task = null;
+        String lockKey = null;
+        String lockToken = null;
         try {
             String taskNo = readTaskNo(message);
             log.info("AI阅卷消费者收到消息: taskNo={}", taskNo);
+
+            // ---- 分布式锁占位：同一 taskNo 同一时刻只允许一个实例处理 ----
+            // 与 markProcessingIfIdle 的乐观状态更新互补：
+            // 状态更新防"同一 DB 内并发"，分布式锁防"多实例重复消费"。
+            // 获取失败说明另一个消费者正在处理，直接 ack 放弃本条重复消息，不重复调用大模型。
+            lockKey = LOCK_KEY_PREFIX + taskNo;
+            lockToken = distributedLock.tryLock(lockKey, LOCK_LEASE_MILLIS);
+            if (lockToken == null) {
+                log.warn("AI阅卷任务已被其他消费者持有锁，跳过重复消费: taskNo={}", taskNo);
+                channel.basicAck(deliveryTag, false);
+                return;
+            }
 
             task = requireTask(taskNo);
             if (isTerminal(task)) {
@@ -167,6 +191,11 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
                 nackToDlq(channel, deliveryTag, task == null ? null : task, reason);
             } catch (IOException ignored) {
                 // Channel 断了就不管了，mark_task 已回写 status=3/4，任务不会丢
+            }
+        } finally {
+            // 无论成功、失败还是幂等跳过，都必须释放锁；token 不匹配时 unlock 不会误删他人锁
+            if (lockToken != null) {
+                distributedLock.unlock(lockKey, lockToken);
             }
         }
     }

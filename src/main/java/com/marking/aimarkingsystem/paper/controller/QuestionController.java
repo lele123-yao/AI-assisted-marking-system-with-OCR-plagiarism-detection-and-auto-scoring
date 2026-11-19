@@ -1,5 +1,6 @@
 package com.marking.aimarkingsystem.paper.controller;
 
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.Result;
 import com.marking.aimarkingsystem.paper.dto.QuestionAddDTO;
@@ -50,6 +51,7 @@ public class QuestionController {
 
     @Operation(summary = "新增题目",
             description = "仅草稿试卷可加题；题号在试卷内唯一；knowledgeIds 可同时绑定知识点")
+    @OperationLog(module = "题目管理", action = "新增题目")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PostMapping
     public Result<Long> addQuestion(@Valid @RequestBody QuestionAddDTO dto) {
@@ -58,6 +60,7 @@ public class QuestionController {
 
     @Operation(summary = "编辑题目",
             description = "不允许移动到其他试卷；知识点按传入的 knowledgeIds 整体覆盖")
+    @OperationLog(module = "题目管理", action = "编辑题目")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PutMapping("/{id}")
     public Result<Void> updateQuestion(
@@ -69,6 +72,7 @@ public class QuestionController {
 
     @Operation(summary = "删除题目",
             description = "逻辑删除题目并清理知识点关联，同时回写试卷总分与题数")
+    @OperationLog(module = "题目管理", action = "删除题目")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @DeleteMapping("/{id}")
     public Result<Void> deleteQuestion(@Parameter(description = "题目ID") @PathVariable Long id) {
@@ -87,6 +91,7 @@ public class QuestionController {
 
     @Operation(summary = "维护题目知识点标签",
             description = "整体覆盖语义：传空数组表示清空该题目的全部知识点")
+    @OperationLog(module = "题目管理", action = "维护题目知识点")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
     @PutMapping("/{id}/knowledge")
     public Result<Void> assignKnowledge(

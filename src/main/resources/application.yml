@@ -148,3 +148,41 @@ minio:
 #   # - resource: aiMarkConsumer   # @SentinelResource 标注的资源名
 #   #   grade: 1                   # 1 = QPS 限流
 #   #   count: 5                   # 每秒最多 5 次，超出部分排队或降级
+
+# ==================== 接口限流（模块7：Redis 滑动窗口） ====================
+# 说明：本阶段只提供 RedisSlidingWindowLimiter 工具类，默认不拦截任何接口，
+#       因此这里只定义"默认参数"，由业务侧调用时显式传入，避免每个接口硬编码。
+# 典型用法（后续在登录/提交答卷/AI讲评等接口或拦截器中调用）：
+#   limiter.tryAcquire("rate_limit:login:ip:" + ip, 5, 60)
+#   limiter.tryAcquire("rate_limit:ai-report:user:" + userId, 3, 600)
+# 参数含义：
+# - default-limit：默认窗口内最大请求数；
+# - default-window-seconds：默认窗口长度（秒）；
+# - key-prefix：限流 key 统一前缀，便于 Redis 运维检索与清理。
+rate-limit:
+  enabled: true
+  key-prefix: "rate_limit:"
+  default-limit: 20
+  default-window-seconds: 60
+
+# ==================== 日志（模块7：操作日志切面 + 文件滚动） ====================
+# 操作日志切面 OperationLogAspect 使用 SLF4J 输出到应用日志，
+# 这里统一定义日志级别、输出文件与滚动策略，避免日志无限增长占满磁盘。
+# - com.marking.aimarkingsystem=debug：开发阶段便于查看业务细节，生产可调为 info；
+# - file.name：日志文件路径，相对项目启动目录；
+# - max-file-size / max-history / total-size-cap：单文件 50MB、保留 30 天、总量 2GB；
+# - console pattern 带毫秒与线程名，便于排查并发与慢接口。
+logging:
+  level:
+    root: info
+    com.marking.aimarkingsystem: debug
+  file:
+    name: logs/ai-marking-system.log
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 30
+      total-size-cap: 2GB

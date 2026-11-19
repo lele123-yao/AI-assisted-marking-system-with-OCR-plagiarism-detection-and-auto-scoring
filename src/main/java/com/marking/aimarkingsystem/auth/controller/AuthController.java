@@ -2,6 +2,7 @@ package com.marking.aimarkingsystem.auth.controller;
 
 import com.marking.aimarkingsystem.auth.service.AuthService;
 import com.marking.aimarkingsystem.auth.vo.LoginVO;
+import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.result.Result;
 import com.marking.aimarkingsystem.user.dto.LoginDTO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,6 +36,7 @@ public class AuthController {
      */
     @Operation(summary = "账号密码登录",
             description = "校验 BCrypt 密码后签发 JWT，同一账号后登录会挤掉先登录的 token，有效期 30 分钟")
+    @OperationLog(module = "认证管理", action = "账号密码登录", recordResult = false)
     @PostMapping("/login")
     public Result<LoginVO> login(@Valid @RequestBody LoginDTO loginDTO) {
         return Result.success("登录成功", authService.login(loginDTO));
