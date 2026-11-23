@@ -7,6 +7,7 @@ import com.marking.aimarkingsystem.answer.entity.ExamAnswer;
 import com.marking.aimarkingsystem.answer.enums.AnswerSourceEnum;
 import com.marking.aimarkingsystem.answer.enums.AnswerStatusEnum;
 import com.marking.aimarkingsystem.answer.mapper.ExamAnswerMapper;
+import com.marking.aimarkingsystem.answer.service.PaperAnswerItemService;
 import com.marking.aimarkingsystem.common.util.DeepSeekLlmUtil;
 import com.marking.aimarkingsystem.common.util.RedisDistributedLock;
 import com.marking.aimarkingsystem.mark.entity.MarkTask;
@@ -27,6 +28,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,19 +71,22 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
     private final ExamPaperMapper examPaperMapper;
     private final DeepSeekLlmUtil llmUtil;
     private final RedisDistributedLock distributedLock;
+    private final PaperAnswerItemService paperAnswerItemService;
 
     public AiMarkConsumer(MarkTaskMapper markTaskMapper,
                           ExamAnswerMapper examAnswerMapper,
                           ExamQuestionMapper examQuestionMapper,
                           ExamPaperMapper examPaperMapper,
                           DeepSeekLlmUtil llmUtil,
-                          RedisDistributedLock distributedLock) {
+                          RedisDistributedLock distributedLock,
+                          PaperAnswerItemService paperAnswerItemService) {
         super(markTaskMapper);
         this.examAnswerMapper = examAnswerMapper;
         this.examQuestionMapper = examQuestionMapper;
         this.examPaperMapper = examPaperMapper;
         this.llmUtil = llmUtil;
         this.distributedLock = distributedLock;
+        this.paperAnswerItemService = paperAnswerItemService;
     }
 
     /**
@@ -98,7 +103,9 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
         String lockToken = null;
         try {
             String taskNo = readTaskNo(message);
-            log.info("AI阅卷消费者收到消息: taskNo={}", taskNo);
+            // BYOK：消息头携带触发人用户名，用其自填的 Key 调用大模型；缺失时回退到最近一次保存的 Key
+            String llmUser = readLlmUser(message);
+            log.info("AI阅卷消费者收到消息: taskNo={}, llmUser={}", taskNo, llmUser);
 
             // ---- 分布式锁占位：同一 taskNo 同一时刻只允许一个实例处理 ----
             // 与 markProcessingIfIdle 的乐观状态更新互补：
@@ -141,13 +148,18 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
 
             BigDecimal totalAiScore = BigDecimal.ZERO;
             JSONArray itemScores = new JSONArray();
+            // 逐题结果同时收集为 Map，阅卷完成后写入 exam_answer_item 明细表
+            List<Map<String, Object>> aiItems = new ArrayList<>();
             String answerContent = answer.getAnswerContent();
             String ocrText = answer.getOcrText();
+            // 纸质扫描卷没有线上作答，逐题打分时把整段 OCR 文本交给大模型自行定位
+            boolean paperScan = AnswerSourceEnum.PAPER_SCAN.name().equals(answer.getAnswerSource());
 
             for (ExamQuestion q : questions) {
-                Map<String, Object> item = callLlmForQuestion(q, answerContent, ocrText);
+                Map<String, Object> item = callLlmForQuestion(q, answerContent, ocrText, llmUser, paperScan);
                 totalAiScore = totalAiScore.add((BigDecimal) item.get("score"));
                 itemScores.add(item);
+                aiItems.add(item);
             }
             totalAiScore = totalAiScore.setScale(2, RoundingMode.HALF_UP);
 
@@ -171,6 +183,8 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
                 throw new IllegalStateException("未知答卷来源: " + answer.getAnswerSource());
             }
             examAnswerMapper.updateById(answerUpdate);
+            // 逐题明细单独落表：只写 AI 两列，教师复核结果不会被覆盖
+            paperAnswerItemService.saveAiItems(answer.getId(), aiItems);
 
             markSuccess(task);
             ack(channel, deliveryTag, task);
@@ -218,16 +232,17 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
      *
      * 返回的 score 用题目满分 clamp（0 ~ score*1.1），防止大模型偶尔超分。
      */
-    private Map<String, Object> callLlmForQuestion(ExamQuestion q, String onlineAnswerContent, String ocrText) {
-        String studentAnswer = Objects.equals(q.getQuestionType(), AnswerSourceEnum.PAPER_SCAN)
-                ? ocrText : extractStudentAnswer(onlineAnswerContent, q.getId());
+    private Map<String, Object> callLlmForQuestion(ExamQuestion q, String onlineAnswerContent, String ocrText,
+                                                   String llmUser, boolean paperScan) {
+        String studentAnswer = paperScan ? ocrText : extractStudentAnswer(onlineAnswerContent, q.getId());
         // 纸质答卷没有线上作答内容，逐题打分时把整段 OCR 文本喂过去让 AI 自行定位对应答案
         // 线上答卷则按 answerContent（JSON 格式的逐题答案）取对应题目的作答
 
-        String systemPrompt = "你是一名经验丰富的高校阅卷老师，请严格按评分细则为考生答案打分。"
+        String systemPrompt = "你是一名经验丰富的高校阅卷老师，请严格按评分细则为考生答案打分，并说明每一分的依据。"
                 + "你必须且只能返回一段 JSON，格式为 "
-                + "{\"score\": 数字, \"comment\": \"评语\"}，"
-                + "其中 score 是你给的得分（小数一位即可），comment 是一句到三句的评语。"
+                + "{\"score\": 数字, \"comment\": \"评分依据\"}，其中 score 是你给的得分（小数一位即可）。"
+                + "comment 必须包含三部分：①命中的得分点及对应分值；②缺失或错误导致的扣分点；"
+                + "③一句改进建议。总长度 50~200 字。"
                 + "不要返回 JSON 以外的任何文字、不要用 markdown 包裹。";
 
         StringBuilder userPrompt = new StringBuilder();
@@ -244,9 +259,14 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
         }
         userPrompt.append("【满分】").append(q.getScore()).append("分\n");
         userPrompt.append("【考生答案】").append(nullToEmpty(studentAnswer)).append("\n");
-        userPrompt.append("请严格按评分细则打分，得分不能超过满分。仅返回 JSON。");
+        if (paperScan) {
+            userPrompt.append("说明：考生答案是整份试卷的 OCR 文本，请自行定位本题对应的作答；")
+                    .append("如果找不到明确作答，按 0 分处理并在评语中说明。\n");
+        }
+        userPrompt.append("请逐条对照评分细则，写清楚每个得分点是否命中、扣分原因，得分不能超过满分。仅返回 JSON。");
 
-        String raw = llmUtil.chat(systemPrompt, userPrompt.toString());
+        // BYOK：优先用触发阅卷的用户自己的 Key；llmUser 为空或未配置时回退到最近一次保存的 Key
+        String raw = llmUtil.chatAs(llmUser, systemPrompt, userPrompt.toString());
         JSONObject parsed = parseLlmJson(raw);
 
         double rawScore = parsed.getDouble("score");
@@ -301,6 +321,12 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
 
     private String nullToEmpty(String s) {
         return s == null ? "" : s;
+    }
+
+    /** 读取消息头里的触发人用户名（BYOK）；不存在返回 null，由 chatAs 回退到最近一次保存的 Key */
+    private String readLlmUser(Message message) {
+        Object value = message.getMessageProperties().getHeader("llmUser");
+        return value == null ? null : value.toString();
     }
 
     @Override

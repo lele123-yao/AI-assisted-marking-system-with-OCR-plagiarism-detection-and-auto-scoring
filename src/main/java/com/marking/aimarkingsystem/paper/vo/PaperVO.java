@@ -71,6 +71,12 @@ public class PaperVO implements Serializable {
     @Schema(description = "试卷说明")
     private String description;
 
+    @Schema(description = "试卷 PDF 对象名（MinIO）")
+    private String pdfUrl;
+
+    @Schema(description = "拍照图片对象名 JSON 数组")
+    private String imageUrl;
+
     @Schema(description = "创建时间")
     private LocalDateTime createTime;
 

@@ -323,6 +323,8 @@ public class PaperService {
         paper.setEndTime(dto.getEndTime());
         paper.setAiMarking(dto.getAiMarking());
         paper.setDescription(dto.getDescription());
+        paper.setPdfUrl(dto.getPdfUrl());
+        paper.setImageUrl(dto.getImageUrl());
     }
 
     /** 批量填充课程名称，避免分页结果逐条查课程表 */
@@ -362,6 +364,8 @@ public class PaperService {
         vo.setAiMarking(paper.getAiMarking());
         vo.setCreatorId(paper.getCreatorId());
         vo.setDescription(paper.getDescription());
+        vo.setPdfUrl(paper.getPdfUrl());
+        vo.setImageUrl(paper.getImageUrl());
         vo.setCreateTime(paper.getCreateTime());
         vo.setUpdateTime(paper.getUpdateTime());
         return vo;

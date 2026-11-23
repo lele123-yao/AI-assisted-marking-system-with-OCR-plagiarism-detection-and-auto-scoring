@@ -8,6 +8,7 @@ import com.marking.aimarkingsystem.knowledge.entity.QuestionKnowledgeRel;
 import com.marking.aimarkingsystem.knowledge.mapper.QuestionKnowledgeMapper;
 import com.marking.aimarkingsystem.knowledge.mapper.QuestionKnowledgeRelMapper;
 import com.marking.aimarkingsystem.paper.dto.QuestionAddDTO;
+import com.marking.aimarkingsystem.paper.dto.QuestionBatchDTO;
 import com.marking.aimarkingsystem.paper.entity.ExamPaper;
 import com.marking.aimarkingsystem.paper.entity.ExamQuestion;
 import com.marking.aimarkingsystem.paper.mapper.ExamPaperMapper;
@@ -19,10 +20,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -76,6 +81,94 @@ public class QuestionService {
         this.knowledgeRelMapper = knowledgeRelMapper;
         this.promptTemplateMapper = promptTemplateMapper;
         this.paperService = paperService;
+    }
+
+    /**
+     * 批量保存整份试卷的题目（整体替换）。
+     *
+     * 适用场景：
+     * - 上传解析后，教师确认了整份试卷的题目与评分标准，一次性入库；
+     * - 编辑草稿时整卷替换。
+     *
+     * 校验策略：先整体校验（题号唯一、主观题必须有参考答案与评分细则、分值 > 0），
+     * 全部通过后再在同一事务内删除旧题、插入新题并回写试卷汇总，
+     * 避免出现"删了旧题、新题又因校验失败没插进去"的半成品数据。
+     *
+     * 数据权限占位：同新增题目，需校验试卷归属当前教师。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> batchSaveDraft(QuestionBatchDTO dto) {
+        ExamPaper paper = requirePaper(dto.getPaperId());
+        assertPaperEditable(paper);
+
+        List<QuestionBatchDTO.Item> items = dto.getQuestions() == null
+                ? Collections.emptyList() : dto.getQuestions();
+
+        validateBatchItems(items);
+
+        // 清空旧题目与知识点关联（逻辑删除题目）
+        List<ExamQuestion> existing = questionMapper.selectList(
+                Wrappers.<ExamQuestion>lambdaQuery().eq(ExamQuestion::getPaperId, paper.getId()));
+        if (!existing.isEmpty()) {
+            List<Long> oldIds = existing.stream().map(ExamQuestion::getId).toList();
+            knowledgeRelMapper.delete(Wrappers.<QuestionKnowledgeRel>lambdaQuery()
+                    .in(QuestionKnowledgeRel::getQuestionId, oldIds));
+            questionMapper.delete(Wrappers.<ExamQuestion>lambdaQuery()
+                    .eq(ExamQuestion::getPaperId, paper.getId()));
+        }
+
+        // 按前端顺序插入，sortOrder 从 1 开始
+        BigDecimal totalScore = BigDecimal.ZERO;
+        int sortOrder = 1;
+        for (QuestionBatchDTO.Item item : items) {
+            ExamQuestion question = new ExamQuestion();
+            question.setPaperId(paper.getId());
+            question.setQuestionNo(item.getQuestionNo().trim());
+            question.setSectionName(item.getSectionName());
+            question.setQuestionType(item.getQuestionType());
+            question.setQuestionContent(item.getQuestionContent());
+            question.setStandardAnswer(item.getStandardAnswer());
+            question.setScoringRule(item.getScoringRule());
+            question.setScore(item.getScore());
+            question.setDifficulty(DEFAULT_DIFFICULTY);
+            question.setSortOrder(sortOrder++);
+            questionMapper.insert(question);
+            totalScore = totalScore.add(item.getScore());
+        }
+
+        paperService.refreshSummary(paper.getId());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("questionCount", items.size());
+        result.put("totalScore", totalScore);
+        return result;
+    }
+
+    /** 批量题目的整体校验：题号唯一、主观题必需字段、分值合法 */
+    private void validateBatchItems(List<QuestionBatchDTO.Item> items) {
+        Set<String> seenQuestionNos = new HashSet<>();
+        int row = 0;
+        for (QuestionBatchDTO.Item item : items) {
+            row++;
+            String questionNo = item.getQuestionNo() == null ? "" : item.getQuestionNo().trim();
+            if (questionNo.isEmpty()) {
+                throw new BusinessException("第 " + row + " 道题的题号不能为空");
+            }
+            if (!seenQuestionNos.add(questionNo)) {
+                throw new BusinessException("题号重复：" + questionNo);
+            }
+            if (item.getScore() == null || item.getScore().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException("第 " + questionNo + " 题的分值必须大于 0");
+            }
+            if (item.getQuestionType() != null && item.getQuestionType() >= SUBJECTIVE_TYPE_START) {
+                if (!StringUtils.hasText(item.getStandardAnswer())) {
+                    throw new BusinessException("第 " + questionNo + " 题为主观题，必须填写参考答案");
+                }
+                if (!StringUtils.hasText(item.getScoringRule())) {
+                    throw new BusinessException("第 " + questionNo + " 题为主观题，必须填写评分细则");
+                }
+            }
+        }
     }
 
     /**

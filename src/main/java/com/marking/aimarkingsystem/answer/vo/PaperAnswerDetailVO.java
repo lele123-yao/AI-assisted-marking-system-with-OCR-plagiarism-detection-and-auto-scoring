@@ -75,6 +75,9 @@ public class PaperAnswerDetailVO implements Serializable {
     @Schema(description = "教师最终得分，未确认时为空", example = "33.50")
     private BigDecimal teacherFinalScore;
 
+    @Schema(description = "逐题结果（题目信息 + AI 参考分/评语 + 教师最终分/评语）")
+    private java.util.List<QuestionResultVO> questionResults;
+
     // ==================== 成绩复核（模块6） ====================
 
     @Schema(description = "复核状态：0 待复核，1 复核通过，2 已改分，3 复核驳回", example = "1")

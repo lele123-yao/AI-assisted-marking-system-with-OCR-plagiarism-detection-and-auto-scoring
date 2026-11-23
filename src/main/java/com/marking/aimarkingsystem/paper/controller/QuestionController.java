@@ -4,6 +4,7 @@ import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.Result;
 import com.marking.aimarkingsystem.paper.dto.QuestionAddDTO;
+import com.marking.aimarkingsystem.paper.dto.QuestionBatchDTO;
 import com.marking.aimarkingsystem.paper.dto.QuestionKnowledgeAssignDTO;
 import com.marking.aimarkingsystem.paper.service.QuestionService;
 import com.marking.aimarkingsystem.paper.vo.QuestionVO;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 题目管理接口。
@@ -58,6 +60,16 @@ public class QuestionController {
         return Result.success("新增成功", questionService.addQuestion(dto));
     }
 
+    @Operation(summary = "批量保存试卷题目",
+            description = "整体替换语义：仅草稿试卷可调用；先清空旧题再按顺序插入，"
+                    + "返回题数与总分。上传解析后教师确认题目时使用")
+    @OperationLog(module = "题目管理", action = "批量保存题目")
+    @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
+    @PostMapping("/batch")
+    public Result<Map<String, Object>> batchSave(@Valid @RequestBody QuestionBatchDTO dto) {
+        return Result.success("保存成功", questionService.batchSaveDraft(dto));
+    }
+
     @Operation(summary = "编辑题目",
             description = "不允许移动到其他试卷；知识点按传入的 knowledgeIds 整体覆盖")
     @OperationLog(module = "题目管理", action = "编辑题目")
@@ -81,8 +93,8 @@ public class QuestionController {
     }
 
     @Operation(summary = "查询试卷下全部题目",
-            description = "按排序号升序返回，已填充知识点ID/名称与提示词模板名称")
-    @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
+            description = "按排序号升序返回，已填充知识点ID/名称与提示词模板名称；学生在线作答也需要读取题目")
+    @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER", "ROLE_STUDENT"})
     @GetMapping("/paper/{paperId}")
     public Result<List<QuestionVO>> listByPaper(
             @Parameter(description = "试卷ID") @PathVariable @Min(1) Long paperId) {

@@ -89,11 +89,19 @@ public class RedisSlidingWindowLimiter {
         // member 必须唯一，否则同一毫秒内的多次请求会被 ZSET 去重，导致计数偏小
         String member = now + "-" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
 
-        Long result = redisTemplate.execute(ACQUIRE_SCRIPT, List.of(key),
-                String.valueOf(now),
-                String.valueOf(windowMillis),
-                String.valueOf(limit),
-                member);
+        Long result;
+        try {
+            result = redisTemplate.execute(ACQUIRE_SCRIPT, List.of(key),
+                    String.valueOf(now),
+                    String.valueOf(windowMillis),
+                    String.valueOf(limit),
+                    member);
+        } catch (Exception e) {
+            // Redis 不可用时降级放行，避免限流组件故障导致所有带 @RateLimit 的接口不可用
+            org.slf4j.LoggerFactory.getLogger(RedisSlidingWindowLimiter.class)
+                    .warn("Redis 限流执行失败，降级放行: key={}, err={}", key, e.getMessage());
+            return true;
+        }
         return Long.valueOf(1L).equals(result);
     }
 

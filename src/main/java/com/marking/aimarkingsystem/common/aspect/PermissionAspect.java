@@ -6,6 +6,7 @@ import com.marking.aimarkingsystem.common.result.ResultCode;
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Before;
+import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
@@ -38,8 +39,11 @@ public class PermissionAspect {
 
     private static final Logger log = LoggerFactory.getLogger(PermissionAspect.class);
 
-    @Before("@annotation(requiresPermission)")
-    public void checkPermission(JoinPoint joinPoint, RequiresPermission requiresPermission) {
+    // 用全限定名绑定注解，避免依赖编译参数名（-parameters），详见 OperationLogAspect 注释。
+    @Before("@annotation(com.marking.aimarkingsystem.common.annotation.RequiresPermission)")
+    public void checkPermission(JoinPoint joinPoint) {
+        RequiresPermission requiresPermission = ((MethodSignature) joinPoint.getSignature())
+                .getMethod().getAnnotation(RequiresPermission.class);
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 
         // 1. 未登录 / 匿名用户直接拒绝

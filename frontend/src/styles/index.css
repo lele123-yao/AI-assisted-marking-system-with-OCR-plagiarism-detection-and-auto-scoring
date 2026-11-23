@@ -1,0 +1,151 @@
+/* 全局基础样式 */
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  /* AI 科技风主题色板 */
+  --ai-ink: #14163f;
+  --ai-primary: #5b6cff;
+  --ai-accent: #9a5bff;
+  --ai-cyan: #29d2e4;
+  --ai-gradient: linear-gradient(120deg, #171a4a 0%, #2a2a72 55%, #4a3fa8 100%);
+  --ai-gradient-soft: linear-gradient(135deg, #f4f6ff 0%, #eef1ff 100%);
+  --ai-border: #e6e9f7;
+  --ai-shadow: 0 10px 30px rgba(31, 36, 94, 0.08);
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+  font-size: 14px;
+  color: #2f3247;
+  background-color: #f4f6fc;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  color: #fff;
+  background: rgba(91, 108, 255, 0.75);
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+/* 滚动条：细而柔和 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d3d9ee;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b9c2e2;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 路由切换过渡动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* ==================== 业务页面通用视觉 ==================== */
+
+/* 所有业务页统一纵向布局与间距 */
+.page-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: page-in 0.24s ease;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 卡片圆角、表头字重 */
+.el-card {
+  border-radius: 12px;
+  border-color: var(--ai-border);
+  transition: box-shadow 0.24s ease, border-color 0.24s ease;
+}
+
+.el-card.is-never-shadow:hover {
+  box-shadow: var(--ai-shadow);
+  border-color: #dfe4f6;
+}
+
+.el-card__header {
+  padding: 16px 20px;
+  font-weight: 600;
+  color: #2b2e45;
+  border-bottom: 1px solid #eef1fb;
+}
+
+/* 表格：浅色表头 + 行悬浮高亮 */
+.el-table th.el-table__cell {
+  background-color: #f7f9fc !important;
+  color: #606266;
+  font-weight: 600;
+}
+
+.el-table .el-table__body tr:hover > td.el-table__cell {
+  background-color: #f5f9ff !important;
+}
+
+/* 查询工具栏里的输入控件统一圆角 */
+.el-input__wrapper,
+.el-select__wrapper {
+  border-radius: 6px;
+}
+
+/* 查询工具栏标题：统一加一条主题色竖线 */
+.page-container .toolbar .title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-container .toolbar .title::before {
+  width: 4px;
+  height: 16px;
+  content: '';
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--ai-primary), var(--ai-accent));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-container {
+    animation: none;
+  }
+}

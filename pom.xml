@@ -143,6 +143,22 @@
             <version>4.1.2</version>
         </dependency>
 
+        <!-- ========== PDFBox（试卷 PDF 文本层提取） ========== -->
+        <!-- 说明：只做文本层提取，扫描版 PDF 没有文本层时返回提示，
+             引导老师改用拍照图片 OCR 或手动录题；排除 commons-logging
+             避免与 Spring 的 jcl-over-slf4j 日志桥接冲突。 -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>2.0.31</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>commons-logging</groupId>
+                    <artifactId>commons-logging</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- ========== MinIO（答卷图片、纸质扫描件等对象存储） ========== -->
         <dependency>
             <groupId>io.minio</groupId>
@@ -193,6 +209,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
+                    <!-- 保留方法参数名：AOP 切面 @annotation 绑定、Spring MVC 参数名解析都依赖它 -->
+                    <parameters>true</parameters>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>

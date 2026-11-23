@@ -2,9 +2,13 @@ package com.marking.aimarkingsystem.paper.controller;
 
 import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
+import com.marking.aimarkingsystem.common.exception.BusinessException;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.Result;
+import com.marking.aimarkingsystem.common.util.RedisSlidingWindowLimiter;
+import com.marking.aimarkingsystem.paper.dto.PaperParseResult;
 import com.marking.aimarkingsystem.paper.dto.PaperSaveDTO;
+import com.marking.aimarkingsystem.paper.service.PaperParseService;
 import com.marking.aimarkingsystem.paper.service.PaperService;
 import com.marking.aimarkingsystem.paper.vo.PaperVO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -23,6 +27,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.util.List;
 
 /**
  * 试卷管理接口。
@@ -45,8 +52,16 @@ public class PaperController {
 
     private final PaperService paperService;
 
-    public PaperController(PaperService paperService) {
+    private final PaperParseService paperParseService;
+
+    private final RedisSlidingWindowLimiter rateLimiter;
+
+    public PaperController(PaperService paperService,
+                           PaperParseService paperParseService,
+                           RedisSlidingWindowLimiter rateLimiter) {
         this.paperService = paperService;
+        this.paperParseService = paperParseService;
+        this.rateLimiter = rateLimiter;
     }
 
     @Operation(summary = "新增试卷",
@@ -68,6 +83,25 @@ public class PaperController {
             @Valid @RequestBody PaperSaveDTO dto) {
         paperService.saveDraft(id, dto);
         return Result.success();
+    }
+
+    @Operation(summary = "上传试卷素材并解析题目",
+            description = "支持 PDF（文本层提取）与拍照图片（可配置 OCR）；文件上传 MinIO 后返回对象名与题目草稿。"
+                    + "识别结果仅作辅助，教师确认后通过 POST /questions/batch 入库")
+    @OperationLog(module = "试卷管理", action = "上传解析试卷")
+    @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
+    @PostMapping("/parse")
+    public Result<PaperParseResult> parse(@RequestParam("files") List<MultipartFile> files) {
+        // 解析会同步调用 OCR/大模型，耗时较长，用滑动窗口限流挡住重复点击
+        String username = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication() == null
+                ? "anonymous"
+                : org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication().getName();
+        if (!rateLimiter.tryAcquire("rate_limit:paper:parse:" + username, 10, 60)) {
+            throw new BusinessException("解析请求过于频繁，请稍后再试");
+        }
+        return Result.success(paperParseService.parse(files));
     }
 
     @Operation(summary = "分页查询试卷",

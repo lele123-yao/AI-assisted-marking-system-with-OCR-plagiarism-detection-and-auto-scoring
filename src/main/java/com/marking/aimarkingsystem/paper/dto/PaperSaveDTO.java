@@ -72,4 +72,13 @@ public class PaperSaveDTO implements Serializable {
     @Schema(description = "试卷说明", example = "线上作答，提交后进入AI异步阅卷")
     @Size(max = 512, message = "试卷说明最长 512 位")
     private String description;
+
+    @Schema(description = "试卷 PDF 对象名（由上传解析接口返回）", example = "paper/pdf/2026/11/21/xxx.pdf")
+    @Size(max = 512, message = "PDF 对象名最长 512 位")
+    private String pdfUrl;
+
+    @Schema(description = "拍照图片对象名 JSON 数组（由上传解析接口返回）",
+            example = "[\"paper/images/2026/11/21/a.jpg\"]")
+    @Size(max = 4000, message = "图片对象名总长度超出限制")
+    private String imageUrl;
 }

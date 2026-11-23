@@ -24,7 +24,8 @@ import java.util.List;
  * - teacherFinalScore：教师最终得分，必须由逐题得分汇总得出，不能凭空填写。
  *
  * 业务约束（在 Service 中校验，不能只靠注解）：
- * - 禁止把 AI 参考分直接作为教师最终得分（防止"AI 给多少就抄多少"，失去人工复核意义）；
+ * - 各题得分之和必须等于 teacherFinalScore；
+ * - 教师可以直接采纳 AI 参考分，最终成绩以教师提交的为准；
  * - AI 参考分字段永远由系统写入，本 DTO 不接收，防止前端覆盖。
  *
  * 说明：answerId 通过路径参数传入，不放在请求体里，避免路径与 body 两个 id 不一致。
@@ -71,5 +72,9 @@ public class TeacherScoreDTO implements Serializable {
         @DecimalMin(value = "0.00", message = "题目得分不能为负数")
         @Digits(integer = 3, fraction = 2, message = "题目得分最多两位小数")
         private BigDecimal score;
+
+        @Schema(description = "教师对该题的评语，可为空", example = "要点齐全，表述清楚")
+        @jakarta.validation.constraints.Size(max = 1000, message = "评语最长 1000 字")
+        private String comment;
     }
 }

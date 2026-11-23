@@ -44,6 +44,7 @@ public class SecurityConfig {
     /** 无需认证即可访问的路径（登录相关接口在阶段6实现后自动生效） */
     private static final String[] WHITE_LIST = {
             "/auth/login",
+            "/auth/register",
             "/auth/captcha",
             // Knife4j / OpenAPI 文档
             "/doc.html",

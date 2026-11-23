@@ -3,11 +3,13 @@ package com.marking.aimarkingsystem.mark.service;
 import cn.hutool.core.util.IdUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.marking.aimarkingsystem.common.config.RabbitMQConfig;
+import com.marking.aimarkingsystem.common.util.CurrentUserUtil;
 import com.marking.aimarkingsystem.mark.dto.MarkTaskMessage;
 import com.marking.aimarkingsystem.mark.entity.MarkTask;
 import com.marking.aimarkingsystem.mark.mapper.MarkTaskMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
@@ -67,8 +69,11 @@ public class MarkTaskProducerService {
      */
     @Transactional(rollbackFor = Exception.class)
     public String submitAiMark(Long answerId) {
+        // BYOK：记录是哪个用户触发的阅卷，消费者据此取该用户的 Key 调用大模型。
+        // 异步线程（如定时补偿）里取不到登录上下文，返回 null 时消费者回退到最近一次保存的 Key。
+        String llmUser = CurrentUserUtil.usernameOrNull();
         return createAndSend(answerId, TASK_TYPE_AI_MARK,
-                RabbitMQConfig.ROUTING_AI);
+                RabbitMQConfig.ROUTING_AI, llmUser);
     }
 
     /**
@@ -81,7 +86,7 @@ public class MarkTaskProducerService {
     @Transactional(rollbackFor = Exception.class)
     public String submitOcr(Long answerId) {
         return createAndSend(answerId, TASK_TYPE_OCR,
-                RabbitMQConfig.ROUTING_OCR);
+                RabbitMQConfig.ROUTING_OCR, null);
     }
 
     // ==================== 核心实现 ====================
@@ -94,7 +99,7 @@ public class MarkTaskProducerService {
      * - convertAndSend 同步异常 catch：RabbitMQ 连接没建立、序列化失败等，直接回写 status=3；
      * - CorrelationData 带 taskNo：异步 ConfirmCallback/ReturnCallback 回调时能定位 mark_task。
      */
-    private String createAndSend(Long answerId, String taskType, String routingKey) {
+    private String createAndSend(Long answerId, String taskType, String routingKey, String llmUser) {
         // ---- 幂等：查是否已有未终态任务 ----
         MarkTask existing = markTaskMapper.selectOne(Wrappers.<MarkTask>lambdaQuery()
                 .eq(MarkTask::getAnswerId, answerId)
@@ -125,10 +130,18 @@ public class MarkTaskProducerService {
             MarkTaskMessage message = new MarkTaskMessage(taskNo);
             // CorrelationData 携带 taskNo，ConfirmCallback/ReturnCallback 回调时能定位 mark_task
             CorrelationData correlationData = new CorrelationData(taskNo);
+            // BYOK：把触发人用户名放进消息头（不塞进消息体，保持消息体仅含 taskNo 的极简设计）
+            MessagePostProcessor llmUserHeader = msg -> {
+                if (llmUser != null) {
+                    msg.getMessageProperties().setHeader("llmUser", llmUser);
+                }
+                return msg;
+            };
             rabbitTemplate.convertAndSend(
                     RabbitMQConfig.EXCHANGE_MARKING_TASK,
                     routingKey,
                     message,
+                    llmUserHeader,
                     correlationData);
             log.info("异步任务消息已发送: taskNo={}, exchange={}, routingKey={}",
                     taskNo, RabbitMQConfig.EXCHANGE_MARKING_TASK, routingKey);

@@ -2,6 +2,8 @@ package com.marking.aimarkingsystem.answer.service;
 
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.json.JSONArray;
+import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.alibaba.excel.EasyExcel;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -14,12 +16,14 @@ import com.marking.aimarkingsystem.answer.dto.RosterImportDTO;
 import com.marking.aimarkingsystem.answer.dto.RosterRowDTO;
 import com.marking.aimarkingsystem.answer.dto.TeacherScoreDTO;
 import com.marking.aimarkingsystem.answer.entity.ExamAnswer;
+import com.marking.aimarkingsystem.answer.entity.ExamAnswerItem;
 import com.marking.aimarkingsystem.answer.enums.AnswerSourceEnum;
 import com.marking.aimarkingsystem.answer.enums.AnswerStatusEnum;
 import com.marking.aimarkingsystem.answer.excel.RosterImportListener;
 import com.marking.aimarkingsystem.answer.mapper.ExamAnswerMapper;
 import com.marking.aimarkingsystem.answer.vo.PaperAnswerDetailVO;
 import com.marking.aimarkingsystem.answer.vo.PaperAnswerListVO;
+import com.marking.aimarkingsystem.answer.vo.QuestionResultVO;
 import com.marking.aimarkingsystem.answer.vo.RosterImportResultVO;
 import com.marking.aimarkingsystem.common.constant.RedisKeyConstant;
 import com.marking.aimarkingsystem.common.exception.BusinessException;
@@ -68,7 +72,7 @@ import java.util.stream.Collectors;
  * 3. 触发 OCR：只登记 OCR 任务记录（Redis）并把答卷状态推进到 1（OCR识别中），
  *    真正的 MQ 投递与 OCR 调用由模块4实现，本阶段只留 TODO；
  * 4. 教师录分：逐题校验（不超过题目满分、合计等于最终分），
- *    并禁止把 AI 参考分直接当作教师最终成绩，确认后状态置为 5 已归档。
+ *    教师可以直接采纳 AI 参考分，确认后状态置为 5 已归档。
  *
  * 数据权限（占位，暂不实现）：
  * 任课教师只能操作自己课程下的纸质答卷。完整实现时：
@@ -130,13 +134,16 @@ public class PaperAnswerService {
 
     private final MarkTaskProducerService markTaskProducerService;
 
+    private final PaperAnswerItemService paperAnswerItemService;
+
     public PaperAnswerService(ExamAnswerMapper examAnswerMapper,
                               ExamPaperMapper examPaperMapper,
                               ExamQuestionMapper examQuestionMapper,
                               UserMapper userMapper,
                               MinioUtil minioUtil,
                               RedisUtil redisUtil,
-                              MarkTaskProducerService markTaskProducerService) {
+                              MarkTaskProducerService markTaskProducerService,
+                              PaperAnswerItemService paperAnswerItemService) {
         this.examAnswerMapper = examAnswerMapper;
         this.examPaperMapper = examPaperMapper;
         this.examQuestionMapper = examQuestionMapper;
@@ -144,6 +151,7 @@ public class PaperAnswerService {
         this.minioUtil = minioUtil;
         this.redisUtil = redisUtil;
         this.markTaskProducerService = markTaskProducerService;
+        this.paperAnswerItemService = paperAnswerItemService;
     }
 
     // ==================== 1. 批量导入考生名单 ====================
@@ -389,8 +397,10 @@ public class PaperAnswerService {
      * 校验链（按顺序）：
      * 1. 试卷未归档，OCR / AI 不在处理中（避免人工分数被异步回写覆盖）；
      * 2. 每道题必须属于该试卷，且得分不超过该题满分，同一题不能重复录入；
-     * 3. 各题得分之和必须等于 teacherFinalScore（总分不能与明细脱节）；
-     * 4. 禁止把 AI 参考分直接作为教师最终成绩（要求教师真正核对过）。
+     * 3. 各题得分之和必须等于 teacherFinalScore（总分不能与明细脱节）。
+     *
+     * 说明：教师可以直接采纳 AI 参考分，最终成绩以教师提交的为准，
+     * 系统不再强制"最终分必须与 AI 总分不同"。
      *
      * 写入：
      * - teacherFinalScore = 最终分；
@@ -420,12 +430,6 @@ public class PaperAnswerService {
             throw new BusinessException("各题得分合计 " + sum + " 与最终得分 " + finalScore + " 不一致");
         }
 
-        // 核心业务约束：AI 参考分只能作为参考，不能原样变成教师最终成绩
-        if (answer.getAiReferenceScore() != null
-                && scale(answer.getAiReferenceScore()).compareTo(finalScore) == 0) {
-            throw new BusinessException("不能直接将AI参考分作为教师最终成绩，请逐题核对后录入");
-        }
-
         examAnswerMapper.update(null, Wrappers.<ExamAnswer>lambdaUpdate()
                 .eq(ExamAnswer::getId, answerId)
                 .set(ExamAnswer::getTeacherFinalScore, finalScore)
@@ -433,6 +437,9 @@ public class PaperAnswerService {
                 .set(ExamAnswer::getMarkTime, LocalDateTime.now())
                 .set(ExamAnswer::getAnswerContent, JSONUtil.toJsonStr(dto.getItems()))
                 .set(ExamAnswer::getMarkingError, null));
+
+        // 逐题教师最终分与评语单独落表，AI 评语保留在 ai_* 列不被覆盖
+        paperAnswerItemService.saveFinalItems(answerId, dto.getItems());
 
         log.info("教师确认成绩: answerId={}, paperId={}, aiReferenceScore={}, teacherFinalScore={}",
                 answerId, paper.getId(), answer.getAiReferenceScore(), finalScore);
@@ -506,7 +513,78 @@ public class PaperAnswerService {
         }
         ExamPaper paper = examPaperMapper.selectById(answer.getPaperId());
         // 数据权限（占位）：校验 paper.courseId 所属课程是否属于当前教师
-        return toDetailVO(answer, paper);
+        PaperAnswerDetailVO vo = toDetailVO(answer, paper);
+        vo.setQuestionResults(buildQuestionResults(answer));
+        return vo;
+    }
+
+    /**
+     * 组装逐题结果：题目信息 + AI 分/评语 + 教师分/评语。
+     *
+     * 兼容老数据：本次改造前 AI 逐题结果只写在 exam_answer.answer_content，
+     * 新表没有明细时从该 JSON 里兜底解析 questionId / score / comment，
+     * 保证历史答卷仍能展示 AI 逐题评语。
+     */
+    private List<QuestionResultVO> buildQuestionResults(ExamAnswer answer) {
+        List<ExamQuestion> questions = examQuestionMapper.selectList(
+                Wrappers.<ExamQuestion>lambdaQuery()
+                        .eq(ExamQuestion::getPaperId, answer.getPaperId())
+                        .orderByAsc(ExamQuestion::getSortOrder)
+                        .orderByAsc(ExamQuestion::getId));
+        if (questions.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Map<Long, ExamAnswerItem> itemMap = paperAnswerItemService.listByAnswer(answer.getId()).stream()
+                .collect(Collectors.toMap(ExamAnswerItem::getQuestionId, item -> item, (a, b) -> a));
+
+        Map<Long, BigDecimal> legacyScores = new HashMap<>();
+        Map<Long, String> legacyComments = new HashMap<>();
+        if (itemMap.isEmpty() && StringUtils.hasText(answer.getAnswerContent())) {
+            try {
+                JSONArray array = JSONUtil.parseArray(answer.getAnswerContent());
+                for (int i = 0; i < array.size(); i++) {
+                    JSONObject object = array.getJSONObject(i);
+                    Long questionId = object.getLong("questionId");
+                    if (questionId == null) {
+                        continue;
+                    }
+                    if (object.get("score") != null) {
+                        legacyScores.put(questionId, object.getBigDecimal("score"));
+                    }
+                    String comment = object.getStr("comment");
+                    if (StringUtils.hasText(comment)) {
+                        legacyComments.put(questionId, comment);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("解析历史逐题评语失败: answerId={}", answer.getId(), e);
+            }
+        }
+
+        return questions.stream().map(question -> {
+            QuestionResultVO vo = new QuestionResultVO();
+            vo.setQuestionId(question.getId());
+            vo.setQuestionNo(question.getQuestionNo());
+            vo.setSectionName(question.getSectionName());
+            vo.setQuestionType(question.getQuestionType());
+            vo.setQuestionContent(question.getQuestionContent());
+            vo.setStandardAnswer(question.getStandardAnswer());
+            vo.setScoringRule(question.getScoringRule());
+            vo.setFullScore(question.getScore());
+
+            ExamAnswerItem item = itemMap.get(question.getId());
+            if (item != null) {
+                vo.setAiScore(item.getAiScore());
+                vo.setAiComment(item.getAiComment());
+                vo.setFinalScore(item.getFinalScore());
+                vo.setFinalComment(item.getFinalComment());
+            } else {
+                vo.setAiScore(legacyScores.get(question.getId()));
+                vo.setAiComment(legacyComments.get(question.getId()));
+            }
+            return vo;
+        }).toList();
     }
 
     // ==================== 内部方法 ====================

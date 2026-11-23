@@ -36,7 +36,7 @@ import org.springframework.web.multipart.MultipartFile;
  * 接口范围：
  * 1. Excel 导入考生名单，批量生成空白纸质答卷；
  * 2. 纸质答卷分页查询；
- * 3. 教师手动录入逐题得分并确认最终成绩（AI 参考分不能直接成为最终成绩）；
+ * 3. 教师手动录入逐题得分并确认最终成绩（可直接采纳 AI 参考分）；
  * 4. 上传答卷扫描图片到 MinIO；
  * 5. 触发 OCR 识别任务（本阶段只登记任务与状态，MQ 投递由模块4实现）；
  * 6. 查看纸质答卷详情（OCR 文本、AI 参考分、教师最终分、原图地址）。
@@ -87,7 +87,7 @@ public class PaperAnswerController {
 
     @Operation(summary = "教师手动录入分数",
             description = "逐题录入得分并提交最终分：每题不得超过该题满分，各题之和必须等于最终分；"
-                    + "若最终分与 AI 参考分相同（直接照抄 AI 结果），接口会拒绝")
+                    + "教师可以直接采纳 AI 参考分，最终成绩以教师提交为准")
     @OperationLog(module = "纸质答卷", action = "教师录入分数")
     @RequiresPermission({"ROLE_TEACHER", "ROLE_ADMIN"})
     @PostMapping("/{answerId}/score")

@@ -14,6 +14,7 @@ import com.marking.aimarkingsystem.answer.mapper.ExamAnswerMapper;
 import com.marking.aimarkingsystem.common.exception.BusinessException;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.ResultCode;
+import com.marking.aimarkingsystem.common.util.CurrentUserUtil;
 import com.marking.aimarkingsystem.common.util.DeepSeekLlmUtil;
 import com.marking.aimarkingsystem.common.util.MinioUtil;
 import com.marking.aimarkingsystem.knowledge.entity.QuestionKnowledge;
@@ -448,7 +449,9 @@ public class LearningAnalysisService {
 
         try {
             LearningStatisticsVO statistics = statistics(paper.getId());
-            String analysisText = deepSeekLlmUtil.chat(SYSTEM_PROMPT, buildAnalysisPrompt(paper, statistics));
+            // BYOK：用触发本次讲评的用户自己的 Key（无登录上下文时回退到最近一次保存的 Key）
+            String analysisText = deepSeekLlmUtil.chatAs(
+                    CurrentUserUtil.usernameOrNull(), SYSTEM_PROMPT, buildAnalysisPrompt(paper, statistics));
 
             report.setAnalysisText(analysisText);
             report.setStatus(STATUS_SUCCESS);

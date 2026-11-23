@@ -74,10 +74,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Claims claims = jwtUtil.parseToken(token);
                 String username = claims.getSubject();
 
-                // 关键一步：与 Redis 中该用户当前有效的 token 比对。
-                // 登录时覆盖写入，旧 token 在这里比对不通过 → 立即失效（后登录挤掉先登录）。
+                // 与 Redis 中该用户当前有效的 token 比对：
+                // - Redis 可用时，登录会覆盖写入，旧 token 比对不通过 → 立即失效（后登录挤掉先登录）；
+                // - Redis 不可用 / 降级模式时 redisUtil.get 返回 null，此时信任 JWT 本身的签名与有效期
+                //   （前面已通过 jwtUtil.validateToken 校验），保证无 Redis 也能正常鉴权。
                 String currentToken = redisUtil.get(RedisKeyConstant.LOGIN_TOKEN + username);
-                if (!token.equals(currentToken)) {
+                if (currentToken != null && !token.equals(currentToken)) {
                     log.info("token 已失效（被新登录挤掉或已退出登录）: username={}", username);
                     SecurityContextHolder.clearContext();
                     filterChain.doFilter(request, response);

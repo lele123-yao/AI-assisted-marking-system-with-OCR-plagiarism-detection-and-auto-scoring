@@ -10,7 +10,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/ai_marking?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
-    password: root
+    password: 20060302
     hikari:
       # 连接池最大/最小连接数，按需调整
       maximum-pool-size: 10
@@ -73,6 +73,17 @@ spring:
         # 消费失败（nack/reject）时不重新入队，直接按队列的死信配置转发到死信交换机；
         # 重试次数由业务侧 mark_task.retry_count 控制，避免异常消息在队列里无限循环
         default-requeue-rejected: false
+
+# ==================== 试卷上传解析（模块：试卷管理） ====================
+# PDF 使用 PDFBox 提取文本层；图片走可插拔 OCR HTTP 接口。
+# 未配置 ocr-url 时图片仍会上传成功，但解析结果会提示"请手动录入题目"。
+paper-parse:
+  # OCR 服务地址，留空表示未配置（例如：http://localhost:9000/ocr）
+  ocr-url: ${PAPER_OCR_URL:}
+  # OCR 服务鉴权 Key，留空则不发送鉴权头
+  ocr-api-key: ${PAPER_OCR_API_KEY:}
+  # 单文件大小上限，与 spring.servlet.multipart 保持一致
+  max-file-size: 20MB
 
 # ==================== LLM（模块4：AI阅卷 / OCR后处理 / Prompt模板） ====================
 # 当前默认使用 DeepSeek 官方 API，后续若接入智谱/通义等，只需调整 provider 标识与 api-url，

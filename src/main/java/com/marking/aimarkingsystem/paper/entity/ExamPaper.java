@@ -77,6 +77,12 @@ public class ExamPaper implements Serializable {
     /** 试卷说明 */
     private String description;
 
+    /** 试卷 PDF 源文件在 MinIO 中的对象名，可为空 */
+    private String pdfUrl;
+
+    /** 拍照图片对象名 JSON 数组，可为空 */
+    private String imageUrl;
+
     /** 创建时间，插入时自动填充 */
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;

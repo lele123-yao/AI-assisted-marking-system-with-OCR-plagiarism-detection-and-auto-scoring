@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
@@ -65,8 +66,13 @@ public class OperationLogAspect {
     private static final Pattern SENSITIVE_PATTERN = Pattern.compile(
             "(?i)(\"(password|passwd|oldPassword|newPassword|token|authorization|secret|apiKey|api-key|cookie)\"\\s*:\\s*\")[^\"]*(\")");
 
-    @Around("@annotation(operationLog)")
-    public Object around(ProceedingJoinPoint joinPoint, OperationLog operationLog) throws Throwable {
+    // 用全限定名绑定注解，避免依赖编译参数名（-parameters）。
+    // 若编译未保留参数名，@annotation(operationLog) 无法把注解绑定到方法形参，
+    // 会抛 "Required to bind 2 arguments, but only bound 1" 导致接口全部崩溃。
+    @Around("@annotation(com.marking.aimarkingsystem.common.annotation.OperationLog)")
+    public Object around(ProceedingJoinPoint joinPoint) throws Throwable {
+        OperationLog operationLog = ((MethodSignature) joinPoint.getSignature())
+                .getMethod().getAnnotation(OperationLog.class);
         long startNanos = System.nanoTime();
         String operator = currentOperator();
         String method = joinPoint.getSignature().toShortString();

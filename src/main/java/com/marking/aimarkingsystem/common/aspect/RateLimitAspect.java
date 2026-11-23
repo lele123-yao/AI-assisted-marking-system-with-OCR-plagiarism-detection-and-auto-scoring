@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
@@ -55,8 +56,11 @@ public class RateLimitAspect {
         this.limiter = limiter;
     }
 
-    @Around("@annotation(rateLimit)")
-    public Object around(ProceedingJoinPoint joinPoint, RateLimit rateLimit) throws Throwable {
+    // 用全限定名绑定注解，避免依赖编译参数名（-parameters），详见 OperationLogAspect 注释。
+    @Around("@annotation(com.marking.aimarkingsystem.common.annotation.RateLimit)")
+    public Object around(ProceedingJoinPoint joinPoint) throws Throwable {
+        RateLimit rateLimit = ((MethodSignature) joinPoint.getSignature())
+                .getMethod().getAnnotation(RateLimit.class);
         String businessKey = StringUtils.hasText(rateLimit.key())
                 ? rateLimit.key()
                 : joinPoint.getSignature().getDeclaringType().getSimpleName()

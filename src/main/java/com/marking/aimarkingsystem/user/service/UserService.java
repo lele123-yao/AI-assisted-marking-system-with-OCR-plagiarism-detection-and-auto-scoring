@@ -75,6 +75,9 @@ public class UserService {
             throw new BusinessException("用户名已存在");
         }
 
+        // 密码重复校验：同一个密码只允许一个账号使用
+        ensurePasswordUnused(dto.getPassword());
+
         User user = new User();
         user.setUsername(dto.getUsername());
         user.setPassword(passwordEncoder.encode(dto.getPassword()));
@@ -88,6 +91,24 @@ public class UserService {
             bindRoles(user.getId(), dto.getRoleIds());
         }
         return user.getId();
+    }
+
+    /**
+     * 密码重复校验：同一个密码只允许一个账号使用。
+     *
+     * BCrypt 带随机盐，同一明文每次加密结果都不同，无法用等值条件查询，
+     * 因此逐条用 matches 比对。新增用户是低频操作，线性校验可以接受；
+     * 账号规模变大后可增加密码指纹列（如 SHA-256）做索引查询。
+     */
+    private void ensurePasswordUnused(String rawPassword) {
+        List<User> users = userMapper.selectList(
+                Wrappers.<User>lambdaQuery().select(User::getId, User::getPassword));
+        boolean used = users.stream()
+                .anyMatch(user -> user.getPassword() != null
+                        && passwordEncoder.matches(rawPassword, user.getPassword()));
+        if (used) {
+            throw new BusinessException("该密码已被其他账号使用，请更换密码");
+        }
     }
 
     /**

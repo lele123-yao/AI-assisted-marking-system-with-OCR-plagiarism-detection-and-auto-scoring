@@ -5,6 +5,7 @@ import com.marking.aimarkingsystem.auth.vo.LoginVO;
 import com.marking.aimarkingsystem.common.annotation.OperationLog;
 import com.marking.aimarkingsystem.common.result.Result;
 import com.marking.aimarkingsystem.user.dto.LoginDTO;
+import com.marking.aimarkingsystem.user.dto.RegisterDTO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -40,5 +41,19 @@ public class AuthController {
     @PostMapping("/login")
     public Result<LoginVO> login(@Valid @RequestBody LoginDTO loginDTO) {
         return Result.success("登录成功", authService.login(loginDTO));
+    }
+
+    /**
+     * 师生自助注册。
+     *
+     * 匿名接口，无需 token；注册成功后自动绑定基础角色并直接返回 token，
+     * 响应结构与登录接口完全一致，前端拿到后可直接进入系统。
+     * 管理员角色不允许自助注册。
+     */
+    @Operation(summary = "自助注册",
+            description = "学生 / 教师注册，自动绑定 TEACHER 或 STUDENT 基础角色，注册成功直接返回 token")
+    @PostMapping("/register")
+    public Result<LoginVO> register(@Valid @RequestBody RegisterDTO registerDTO) {
+        return Result.success("注册成功", authService.register(registerDTO));
     }
 }

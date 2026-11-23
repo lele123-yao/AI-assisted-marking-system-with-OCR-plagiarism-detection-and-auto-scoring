@@ -81,7 +81,7 @@ public class ExamAnswer implements Serializable {
     /** 答卷/试卷扫描图片在MinIO中的对象键（非完整URL），仅纸质扫描有值 */
     private String paperImgUrl;
 
-    /** AI参考分：仅作辅助，不能直接作为最终成绩 */
+    /** AI参考分：仅作辅助，教师可直接采纳为最终成绩 */
     private BigDecimal aiReferenceScore;
 
     /** 教师最终得分：教师确认/修改后写入，成绩以此为准 */

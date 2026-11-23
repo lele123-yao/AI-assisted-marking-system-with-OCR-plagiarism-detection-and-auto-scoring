@@ -11,15 +11,19 @@ import com.marking.aimarkingsystem.role.entity.Role;
 import com.marking.aimarkingsystem.role.mapper.RoleMapper;
 import com.marking.aimarkingsystem.role.vo.RoleVO;
 import com.marking.aimarkingsystem.user.dto.LoginDTO;
+import com.marking.aimarkingsystem.user.dto.RegisterDTO;
 import com.marking.aimarkingsystem.user.entity.User;
 import com.marking.aimarkingsystem.user.entity.UserRole;
+import com.marking.aimarkingsystem.user.enums.IdentityEnum;
 import com.marking.aimarkingsystem.user.mapper.UserMapper;
 import com.marking.aimarkingsystem.user.mapper.UserRoleMapper;
 import com.marking.aimarkingsystem.user.vo.UserVO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -100,8 +104,111 @@ public class AuthService {
             throw new BusinessException(ResultCode.FORBIDDEN, "账号已被禁用，请联系管理员");
         }
 
-        // 4. 查询角色，作为 JWT 的权限声明
+        // 4. 查询角色，签发 token 并组装登录响应
         List<Role> roles = loadRoles(user.getId());
+        LoginVO loginVO = issueToken(user, roles);
+        log.info("用户登录成功: username={}, roles={}", user.getUsername(),
+                roles.stream().map(Role::getRoleCode).toList());
+
+        // 5. 更新最后登录时间（只更新该字段，避免覆盖其他数据）
+        User loginRecord = new User();
+        loginRecord.setId(user.getId());
+        loginRecord.setLastLoginTime(LocalDateTime.now());
+        userMapper.updateById(loginRecord);
+
+        return loginVO;
+    }
+
+    /**
+     * 师生自助注册，注册成功后直接签发 token（等同于注册即登录）。
+     *
+     * 业务流程：
+     * 1. 用户名查重（包含逻辑删除账号，避免与唯一索引冲突）；
+     * 2. 根据身份找到基础角色（TEACHER / STUDENT），角色必须已在 SQL 中初始化；
+     * 3. 密码 BCrypt 加密后写入 sys_user，状态默认启用；
+     * 4. 写入 sys_user_role 绑定基础角色；
+     * 5. 复用登录的 token 签发逻辑，返回与登录完全一致的 LoginVO。
+     *
+     * 事务保证"用户 + 角色关联"要么都成功，要么都回滚。
+     * 管理员角色不在可选身份中，防止自助注册提权。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public LoginVO register(RegisterDTO dto) {
+        String username = dto.getUsername().trim();
+
+        // 1. 用户名唯一性预校验
+        if (userMapper.countByUsername(username) > 0) {
+            throw new BusinessException("用户名已存在");
+        }
+
+        // 2. 密码重复校验：同一个密码只能被一个账号使用
+        ensurePasswordUnused(dto.getPassword());
+
+        // 3. 解析身份并查询对应的基础角色
+        // 自助注册只允许学生；教师账号必须由管理员在「系统管理 → 用户管理」创建，避免越权提权
+        IdentityEnum identity = IdentityEnum.fromCode(dto.getIdentity());
+        if (identity != IdentityEnum.STUDENT) {
+            throw new BusinessException("教师账号暂不支持自助注册，请联系管理员创建");
+        }
+        Role baseRole = roleMapper.selectOne(Wrappers.<Role>lambdaQuery()
+                .eq(Role::getRoleCode, identity.getRoleCode())
+                .eq(Role::getStatus, STATUS_ENABLED));
+        if (baseRole == null) {
+            throw new BusinessException("基础角色[" + identity.getRoleCode() + "]未初始化，请联系管理员");
+        }
+
+        // 4. 写入用户，密码 BCrypt 加密，状态默认启用
+        User user = new User();
+        user.setUsername(username);
+        user.setPassword(passwordEncoder.encode(dto.getPassword()));
+        // 表中的 nickname 即真实姓名
+        user.setNickname(dto.getRealName().trim());
+        user.setStatus(STATUS_ENABLED);
+        try {
+            userMapper.insert(user);
+        } catch (DuplicateKeyException e) {
+            // 并发注册同名账号时，由数据库唯一索引兜底，仍转换为业务异常
+            throw new BusinessException("用户名已存在");
+        }
+
+        // 5. 绑定基础角色
+        UserRole relation = new UserRole();
+        relation.setUserId(user.getId());
+        relation.setRoleId(baseRole.getId());
+        userRoleMapper.insert(relation);
+
+        // 6. 签发 token，返回与登录接口一致的结构
+        LoginVO loginVO = issueToken(user, List.of(baseRole));
+        log.info("用户注册成功: username={}, identity={}", username, identity);
+        return loginVO;
+    }
+
+    /**
+     * 密码重复校验：同一个密码只允许一个账号使用。
+     *
+     * BCrypt 每次加密都会生成随机盐，同一明文得到的密文也不同，
+     * 因此无法用 "WHERE password = ?" 判断，只能逐条用 matches 比对。
+     * 注册与新增用户都是低频操作，这里按账号量线性校验；
+     * 若后续账号规模变大，可增加一列密码指纹（如 SHA-256）做索引查询。
+     */
+    private void ensurePasswordUnused(String rawPassword) {
+        List<User> users = userMapper.selectList(
+                Wrappers.<User>lambdaQuery().select(User::getId, User::getPassword));
+        boolean used = users.stream()
+                .anyMatch(user -> user.getPassword() != null
+                        && passwordEncoder.matches(rawPassword, user.getPassword()));
+        if (used) {
+            throw new BusinessException("该密码已被其他账号使用，请更换密码");
+        }
+    }
+
+    /**
+     * 签发 JWT 并写入 Redis（登录与注册共用）。
+     *
+     * 同一用户名重复签发会覆盖 Redis 中的旧 token，
+     * 因此注册后直接把新 token 给前端，也遵循"一个账号仅一个有效会话"的规则。
+     */
+    private LoginVO issueToken(User user, List<Role> roles) {
         List<String> authorities = roles.stream()
                 .map(role -> ROLE_PREFIX + role.getRoleCode())
                 .toList();
@@ -110,19 +217,9 @@ public class AuthService {
         claims.put("userId", user.getId());
         claims.put("authorities", authorities);
 
-        // 5. 签发 token
         String token = jwtUtil.generateToken(user.getUsername(), claims);
-
-        // 6. 写入 Redis：同一 username 直接覆盖旧 token，旧 token 立即失效
         redisUtil.set(RedisKeyConstant.LOGIN_TOKEN + user.getUsername(), token,
                 jwtUtil.getExpiration(), TimeUnit.MILLISECONDS);
-        log.info("用户登录成功: username={}, roles={}", user.getUsername(), authorities);
-
-        // 7. 更新最后登录时间（只更新该字段，避免覆盖其他数据）
-        User loginRecord = new User();
-        loginRecord.setId(user.getId());
-        loginRecord.setLastLoginTime(LocalDateTime.now());
-        userMapper.updateById(loginRecord);
 
         return buildLoginVO(user, roles, token);
     }
