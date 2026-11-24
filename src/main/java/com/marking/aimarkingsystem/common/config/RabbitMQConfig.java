@@ -150,10 +150,14 @@ public class RabbitMQConfig {
      * 消息体用 JSON 序列化（Jackson），方便消费者直接反序列化为 POJO。
      * 注意：JSON 序列化要求消息体里的对象实现 Serializable + 无参构造 + getter/setter，
      * 且类名（含包路径）会写入消息体的 __TypeId__ 头，生产端与消费端类名必须一致。
+     *
+     * trustedPackages：Spring AMQP 出于反序列化安全默认只信任 java.util / java.lang，
+     * 不放开业务包会报 "class ... is not in the trusted packages"，导致消费者一条消息都收不到。
      */
     @Bean
     public MessageConverter messageConverter() {
-        return new Jackson2JsonMessageConverter();
+        return new Jackson2JsonMessageConverter(
+                "java.util", "java.lang", "com.marking.aimarkingsystem.mark.dto");
     }
 
     // ==================== 4. RabbitTemplate：生产者 ConfirmCallback + ReturnCallback ====================

@@ -66,7 +66,7 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
 
     @RabbitListener(queues = "${mq.ocr.queue:marking.ocr.queue}")
     @SentinelResource(value = "ocrConsumer", blockHandler = "onBlocked")
-    public void consume(String messageBody, Channel channel, Message message) {
+    public void consume(Message message, Channel channel) {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
         MarkTask task = null;
         String lockKey = null;
@@ -157,7 +157,7 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
     }
 
     /** Sentinel 熔断回调 */
-    public String onBlocked(String messageBody, Channel channel, Message message, BlockException ex) {
+    public String onBlocked(Message message, Channel channel, BlockException ex) {
         log.warn("OCR 消费者被 Sentinel 拦截: {}", ex.getRule());
         return "BLOCKED: " + ex.getRule();
     }

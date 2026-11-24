@@ -508,9 +508,7 @@ public class PaperAnswerService {
      */
     public PaperAnswerDetailVO getDetail(Long answerId) {
         ExamAnswer answer = requireAnswer(answerId);
-        if (!AnswerSourceEnum.isPaperScan(answer.getAnswerSource())) {
-            throw new BusinessException("该答卷不是纸质扫描答卷");
-        }
+        // 线上作答与纸质扫描共用详情视图：线上卷的考生原文存在 answer_content 中
         ExamPaper paper = examPaperMapper.selectById(answer.getPaperId());
         // 数据权限（占位）：校验 paper.courseId 所属课程是否属于当前教师
         PaperAnswerDetailVO vo = toDetailVO(answer, paper);
@@ -540,25 +538,51 @@ public class PaperAnswerService {
 
         Map<Long, BigDecimal> legacyScores = new HashMap<>();
         Map<Long, String> legacyComments = new HashMap<>();
-        if (itemMap.isEmpty() && StringUtils.hasText(answer.getAnswerContent())) {
+        Map<Long, String> studentAnswers = new HashMap<>();
+        if (StringUtils.hasText(answer.getAnswerContent())) {
+            String content = answer.getAnswerContent().trim();
             try {
-                JSONArray array = JSONUtil.parseArray(answer.getAnswerContent());
-                for (int i = 0; i < array.size(); i++) {
-                    JSONObject object = array.getJSONObject(i);
-                    Long questionId = object.getLong("questionId");
-                    if (questionId == null) {
-                        continue;
+                if (JSONUtil.isTypeJSONArray(content)) {
+                    JSONArray array = JSONUtil.parseArray(content);
+                    for (int i = 0; i < array.size(); i++) {
+                        JSONObject object = array.getJSONObject(i);
+                        Long questionId = object.getLong("questionId");
+                        if (questionId == null) {
+                            continue;
+                        }
+                        String studentAnswer = object.getStr("answer");
+                        if (StringUtils.hasText(studentAnswer)) {
+                            studentAnswers.put(questionId, studentAnswer);
+                        }
+                        if (itemMap.isEmpty()) {
+                            if (object.get("score") != null) {
+                                legacyScores.put(questionId, object.getBigDecimal("score"));
+                            }
+                            String comment = object.getStr("comment");
+                            if (StringUtils.hasText(comment)) {
+                                legacyComments.put(questionId, comment);
+                            }
+                        }
                     }
-                    if (object.get("score") != null) {
-                        legacyScores.put(questionId, object.getBigDecimal("score"));
-                    }
-                    String comment = object.getStr("comment");
-                    if (StringUtils.hasText(comment)) {
-                        legacyComments.put(questionId, comment);
-                    }
+                } else if (JSONUtil.isTypeJSONObject(content)) {
+                    // 兼容更早的历史数据：{"题号": "答案"} 形式的线上作答
+                    Map<String, Long> idByNo = new HashMap<>();
+                    questions.forEach(question -> {
+                        if (question.getQuestionNo() != null) {
+                            idByNo.put(question.getQuestionNo().trim(), question.getId());
+                        }
+                    });
+                    JSONObject object = JSONUtil.parseObj(content);
+                    object.keySet().forEach(no -> {
+                        Long questionId = idByNo.get(no.trim());
+                        String studentAnswer = object.getStr(no);
+                        if (questionId != null && StringUtils.hasText(studentAnswer)) {
+                            studentAnswers.put(questionId, studentAnswer);
+                        }
+                    });
                 }
             } catch (Exception e) {
-                log.warn("解析历史逐题评语失败: answerId={}", answer.getId(), e);
+                log.warn("解析历史逐题作答与评语失败: answerId={}", answer.getId(), e);
             }
         }
 
@@ -572,6 +596,7 @@ public class PaperAnswerService {
             vo.setStandardAnswer(question.getStandardAnswer());
             vo.setScoringRule(question.getScoringRule());
             vo.setFullScore(question.getScore());
+            vo.setStudentAnswer(studentAnswers.get(question.getId()));
 
             ExamAnswerItem item = itemMap.get(question.getId());
             if (item != null) {

@@ -140,6 +140,13 @@ minio:
   # 链接过期后无法再访问，也无法被其他站点长期盗用
   presigned-expiry: 3600
 
+# 文件存储回退：未启动 MinIO（如面试演示环境）时把文件落本地磁盘，
+# 由后端 /files/** 直出，前端拿到的地址为 /api/files/xxx，无需改任何页面。
+storage:
+  fallback-to-local: true
+  local-dir: ./data/uploads
+  local-url-prefix: /api/files
+
 # ==================== Sentinel（本阶段仅预留，全部注释，暂不启用） ====================
 # 用途：模块4 后续阶段对 MQ 消费速率、AI/OCR 下游调用做限流与熔断降级，
 #       防止"班级集中交卷 -> 瞬间几百条阅卷消息 -> 大模型 API 被打爆"。

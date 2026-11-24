@@ -96,7 +96,7 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
      */
     @RabbitListener(queues = "${mq.ai.queue:marking.ai.queue}")
     @SentinelResource(value = "aiMarkConsumer", blockHandler = "onBlocked")
-    public void consume(String messageBody, Channel channel, Message message) {
+    public void consume(Message message, Channel channel) {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
         MarkTask task = null;
         String lockKey = null;
@@ -215,7 +215,7 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
     }
 
     /** Sentinel 熔断回调：返回友好错误描述，不抛异常让框架吃掉 */
-    public String onBlocked(String messageBody, Channel channel, Message message, BlockException ex) {
+    public String onBlocked(Message message, Channel channel, BlockException ex) {
         log.warn("AI阅卷消费者被 Sentinel 拦截: {}", ex.getRule());
         return "BLOCKED: " + ex.getRule();
     }
@@ -285,6 +285,10 @@ public class AiMarkConsumer extends MarkTaskConsumerSupport {
         result.put("questionNo", q.getQuestionNo());
         result.put("score", score);
         result.put("comment", parsed.getStr("comment", ""));
+        // 线上作答：把考生原文一并留在明细里，方便教师/学生回看「写了什么」
+        if (!paperScan) {
+            result.put("answer", nullToEmpty(studentAnswer));
+        }
         return result;
     }
 

@@ -1,6 +1,7 @@
 package com.marking.aimarkingsystem.common.util;
 
 import com.marking.aimarkingsystem.common.exception.BusinessException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
@@ -36,6 +37,7 @@ import java.util.function.Supplier;
  * - 租约应大于业务最大执行时间；若业务可能超时，需要额外的"看门狗"续期，
  *   本阶段不引入（毕设场景用 executeWithLock + 合理租约即可）。
  */
+@Slf4j
 @Component
 public class RedisDistributedLock {
 
@@ -74,8 +76,15 @@ public class RedisDistributedLock {
         long deadline = System.currentTimeMillis() + Math.max(waitMillis, 0L);
 
         while (true) {
-            Boolean acquired = redisTemplate.opsForValue()
-                    .setIfAbsent(key, token, leaseMillis, TimeUnit.MILLISECONDS);
+            Boolean acquired;
+            try {
+                acquired = redisTemplate.opsForValue()
+                        .setIfAbsent(key, token, leaseMillis, TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                // Redis 不可用时降级为非分布式执行：单实例部署下 DB 乐观状态更新仍能防重复消费
+                log.warn("Redis 不可用，分布式锁降级放行: key={}, err={}", key, e.getMessage());
+                return token;
+            }
             if (Boolean.TRUE.equals(acquired)) {
                 return token;
             }
@@ -112,8 +121,14 @@ public class RedisDistributedLock {
         if (!StringUtils.hasText(key) || !StringUtils.hasText(token)) {
             return false;
         }
-        Long result = redisTemplate.execute(UNLOCK_SCRIPT, List.of(key), token);
-        return Long.valueOf(1L).equals(result);
+        try {
+            Long result = redisTemplate.execute(UNLOCK_SCRIPT, List.of(key), token);
+            return Long.valueOf(1L).equals(result);
+        } catch (Exception e) {
+            // 降级放行模式下没有真实的 Redis 锁可释放，忽略即可
+            log.warn("Redis 不可用，释放分布式锁跳过: key={}, err={}", key, e.getMessage());
+            return false;
+        }
     }
 
     /** 判断锁是否被占用（仅诊断用，不能代替加锁） */

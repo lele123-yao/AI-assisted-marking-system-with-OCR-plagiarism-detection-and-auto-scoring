@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { getToken, clearAuth } from '@/utils/auth'
+import { isMobileDevice, preferDesktop } from '@/utils/device'
 
 /**
  * Axios 全局封装
@@ -13,12 +14,18 @@ const service = axios.create({
   timeout: 30000
 })
 
-/** 401 时跳转登录页（避免 request <-> router 循环依赖，直接用 location 跳转） */
+/**
+ * 401 时跳转登录页（避免 request <-> router 循环依赖，直接用 location 跳转）。
+ * 移动端进入 /m/login，桌面端保持 /login。
+ */
 function redirectToLogin() {
   clearAuth()
-  if (!window.location.pathname.startsWith('/login')) {
+  const mobile = isMobileDevice() && !preferDesktop()
+  const inMobileVersion = window.location.pathname.startsWith('/m')
+  const targetLogin = mobile || inMobileVersion ? '/m/login' : '/login'
+  if (!window.location.pathname.startsWith('/login') && !window.location.pathname.startsWith('/m/login')) {
     const redirect = encodeURIComponent(window.location.pathname + window.location.search)
-    window.location.href = `/login?redirect=${redirect}`
+    window.location.href = `${targetLogin}?redirect=${redirect}`
   }
 }
 

@@ -1,5 +1,8 @@
 package com.marking.aimarkingsystem.answer.service;
 
+import cn.hutool.json.JSONArray;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.marking.aimarkingsystem.answer.dto.AnswerSubmitDTO;
 import com.marking.aimarkingsystem.answer.entity.ExamAnswer;
@@ -10,7 +13,9 @@ import com.marking.aimarkingsystem.common.result.ResultCode;
 import com.marking.aimarkingsystem.common.util.MinioUtil;
 import com.marking.aimarkingsystem.common.util.RedisUtil;
 import com.marking.aimarkingsystem.paper.entity.ExamPaper;
+import com.marking.aimarkingsystem.paper.entity.ExamQuestion;
 import com.marking.aimarkingsystem.paper.mapper.ExamPaperMapper;
+import com.marking.aimarkingsystem.paper.mapper.ExamQuestionMapper;
 import com.marking.aimarkingsystem.paper.service.PaperService;
 import com.marking.aimarkingsystem.mark.service.MarkTaskProducerService;
 import com.marking.aimarkingsystem.plagiarism.service.PlagiarismService;
@@ -27,7 +32,10 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -83,6 +91,8 @@ public class AnswerService {
 
     private final ExamPaperMapper examPaperMapper;
 
+    private final ExamQuestionMapper examQuestionMapper;
+
     private final UserMapper userMapper;
 
     private final RedisUtil redisUtil;
@@ -95,6 +105,7 @@ public class AnswerService {
 
     public AnswerService(ExamAnswerMapper examAnswerMapper,
                          ExamPaperMapper examPaperMapper,
+                         ExamQuestionMapper examQuestionMapper,
                          UserMapper userMapper,
                          RedisUtil redisUtil,
                          MinioUtil minioUtil,
@@ -102,6 +113,7 @@ public class AnswerService {
                          PlagiarismService plagiarismService) {
         this.examAnswerMapper = examAnswerMapper;
         this.examPaperMapper = examPaperMapper;
+        this.examQuestionMapper = examQuestionMapper;
         this.userMapper = userMapper;
         this.redisUtil = redisUtil;
         this.minioUtil = minioUtil;
@@ -157,7 +169,10 @@ public class AnswerService {
             answer.setStudentId(student.getId());
             // 学号快照：当前系统以登录账号作为学号，后续如有独立学号字段再从用户扩展表取
             answer.setStudentNo(student.getUsername());
-            answer.setAnswerContent(dto.getAnswerContent());
+            if (StringUtils.hasText(student.getNickname())) {
+                answer.setStudentName(student.getNickname());
+            }
+            answer.setAnswerContent(normalizeAnswerContent(paper.getId(), dto.getAnswerContent()));
             // 初始状态 0 待处理，由模块4的异步阅卷任务负责推进
             answer.setMarkingStatus(MARKING_STATUS_PENDING);
             answer.setSubmitTime(LocalDateTime.now());
@@ -203,6 +218,55 @@ public class AnswerService {
     }
 
     // ==================== 内部方法 ====================
+
+    /**
+     * 统一作答内容为 [{questionId, questionNo, answer}] 数组。
+     *
+     * 前端（桌面与移动）历史上提交的是 {"题号": "答案"} 对象，而异步阅卷与
+     * 答卷详情解析只认带 questionId 的数组，这里按题号补齐 questionId。
+     */
+    private String normalizeAnswerContent(Long paperId, String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return raw;
+        }
+        String trimmed = raw.trim();
+        try {
+            if (JSONUtil.isTypeJSONArray(trimmed)) {
+                return trimmed;
+            }
+            if (!JSONUtil.isTypeJSONObject(trimmed)) {
+                return raw;
+            }
+
+            List<ExamQuestion> questions = examQuestionMapper.selectList(
+                    Wrappers.<ExamQuestion>lambdaQuery().eq(ExamQuestion::getPaperId, paperId));
+            Map<String, Long> idByNo = new HashMap<>();
+            questions.forEach(question -> {
+                if (question.getQuestionNo() != null) {
+                    idByNo.put(question.getQuestionNo().trim(), question.getId());
+                }
+            });
+
+            JSONObject source = JSONUtil.parseObj(trimmed);
+            JSONArray normalized = new JSONArray();
+            for (String key : source.keySet()) {
+                Long questionId = idByNo.get(key.trim());
+                String answer = source.getStr(key);
+                if (questionId == null || !StringUtils.hasText(answer)) {
+                    continue;
+                }
+                JSONObject item = new JSONObject();
+                item.set("questionId", questionId);
+                item.set("questionNo", key);
+                item.set("answer", answer);
+                normalized.add(item);
+            }
+            return normalized.isEmpty() ? raw : normalized.toString();
+        } catch (Exception e) {
+            log.warn("作答内容规范化失败，按原样保存: paperId={}, err={}", paperId, e.getMessage());
+            return raw;
+        }
+    }
 
     /** 取当前登录用户，身份来源只有 SecurityContext */
     private User requireCurrentUser() {

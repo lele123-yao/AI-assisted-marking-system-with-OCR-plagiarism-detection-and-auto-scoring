@@ -66,13 +66,17 @@ public class RedisUtil {
         }
     }
 
-    /** 仅当 key 不存在时写入（可用于登录互踢、分布式锁雏形），返回是否写入成功；异常返回 false */
+    /**
+     * 仅当 key 不存在时写入（可用于登录互踢、分布式锁雏形），返回是否写入成功。
+     * Redis 不可用时降级放行（返回 true）：调用方仍有数据库等兜底校验，
+     * 若返回 false 会导致「Redis 未启动就完全无法交卷」，不符合演示环境要求。
+     */
     public Boolean setIfAbsent(String key, String value, long timeout, TimeUnit unit) {
         try {
             return redisTemplate.opsForValue().setIfAbsent(key, value, timeout, unit);
         } catch (Exception e) {
-            log.warn("Redis setIfAbsent 失败（已降级返回 false）: key={}, err={}", key, e.getMessage());
-            return false;
+            log.warn("Redis setIfAbsent 失败（已降级放行）: key={}, err={}", key, e.getMessage());
+            return true;
         }
     }
 

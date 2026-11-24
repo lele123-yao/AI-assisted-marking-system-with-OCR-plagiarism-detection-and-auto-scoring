@@ -14,3 +14,8 @@ export function myPapers() {
 export function myScores() {
   return request.get('/student/scores')
 }
+
+/** 我的答卷详情（仅限本人，含逐题作答与评分） */
+export function getMyAnswerDetail(answerId) {
+  return request.get(`/student/answers/${answerId}`)
+}

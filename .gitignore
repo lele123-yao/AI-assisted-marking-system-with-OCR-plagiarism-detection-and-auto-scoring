@@ -37,6 +37,9 @@ build/
 logs/
 *.log.*
 
+### 运行时本地上传（MinIO 回退目录，禁止提交） ###
+data/
+
 ### 本地配置（禁止提交密钥/密码） ###
 application-local.yml
 application-local.yaml

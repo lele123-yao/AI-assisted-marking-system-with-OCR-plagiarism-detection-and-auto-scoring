@@ -3,11 +3,13 @@ package com.marking.aimarkingsystem.clazz.controller;
 import com.marking.aimarkingsystem.clazz.service.StudentPortalService;
 import com.marking.aimarkingsystem.clazz.vo.StudentPaperVO;
 import com.marking.aimarkingsystem.clazz.vo.StudentScoreVO;
+import com.marking.aimarkingsystem.answer.vo.PaperAnswerDetailVO;
 import com.marking.aimarkingsystem.common.annotation.RequiresPermission;
 import com.marking.aimarkingsystem.common.result.Result;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -42,5 +44,12 @@ public class StudentPortalController {
     @GetMapping("/scores")
     public Result<List<StudentScoreVO>> myScores() {
         return Result.success(studentPortalService.myScores());
+    }
+
+    @Operation(summary = "我的答卷详情", description = "仅限本人查看，含逐题作答、AI 评分与教师评分")
+    @RequiresPermission("ROLE_STUDENT")
+    @GetMapping("/answers/{answerId}")
+    public Result<PaperAnswerDetailVO> myAnswerDetail(@PathVariable Long answerId) {
+        return Result.success(studentPortalService.myAnswerDetail(answerId));
     }
 }

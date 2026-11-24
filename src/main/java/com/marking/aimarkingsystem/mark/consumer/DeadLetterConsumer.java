@@ -47,8 +47,9 @@ public class DeadLetterConsumer {
      * 但 mark_task 的 status=4 保留，用于人工排查。
      */
     @RabbitListener(queues = "${mq.dlq.queue:marking.dlq.queue}")
-    public void consume(String messageBody, Channel channel, Message message) {
+    public void consume(Message message, Channel channel) {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        String messageBody = new String(message.getBody(), java.nio.charset.StandardCharsets.UTF_8);
         try {
             // 消息体里提取 taskNo
             String taskNo = extractTaskNo(message);

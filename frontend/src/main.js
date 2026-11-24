@@ -9,6 +9,7 @@ import router from './router'
 import pinia from './store'
 import permission from './directives/permission'
 import './styles/index.css'
+import './styles/mobile.css'
 
 const app = createApp(App)
 

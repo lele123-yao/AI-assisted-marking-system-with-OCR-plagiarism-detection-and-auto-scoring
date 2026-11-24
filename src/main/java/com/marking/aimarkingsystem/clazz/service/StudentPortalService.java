@@ -3,6 +3,8 @@ package com.marking.aimarkingsystem.clazz.service;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.marking.aimarkingsystem.answer.entity.ExamAnswer;
 import com.marking.aimarkingsystem.answer.mapper.ExamAnswerMapper;
+import com.marking.aimarkingsystem.answer.service.PaperAnswerService;
+import com.marking.aimarkingsystem.answer.vo.PaperAnswerDetailVO;
 import com.marking.aimarkingsystem.clazz.entity.ClassStudent;
 import com.marking.aimarkingsystem.clazz.entity.PaperAssignment;
 import com.marking.aimarkingsystem.clazz.mapper.ClassStudentMapper;
@@ -12,6 +14,7 @@ import com.marking.aimarkingsystem.clazz.vo.StudentPaperVO;
 import com.marking.aimarkingsystem.clazz.vo.StudentScoreVO;
 import com.marking.aimarkingsystem.course.entity.Course;
 import com.marking.aimarkingsystem.course.mapper.CourseMapper;
+import com.marking.aimarkingsystem.common.exception.BusinessException;
 import com.marking.aimarkingsystem.paper.entity.ExamPaper;
 import com.marking.aimarkingsystem.paper.mapper.ExamPaperMapper;
 import com.marking.aimarkingsystem.paper.service.PaperService;
@@ -49,18 +52,34 @@ public class StudentPortalService {
 
     private final AccountSupport accountSupport;
 
+    private final PaperAnswerService paperAnswerService;
+
     public StudentPortalService(ClassStudentMapper classStudentMapper,
                                 PaperAssignmentMapper paperAssignmentMapper,
                                 ExamPaperMapper examPaperMapper,
                                 ExamAnswerMapper examAnswerMapper,
                                 CourseMapper courseMapper,
-                                AccountSupport accountSupport) {
+                                AccountSupport accountSupport,
+                                PaperAnswerService paperAnswerService) {
         this.classStudentMapper = classStudentMapper;
         this.paperAssignmentMapper = paperAssignmentMapper;
         this.examPaperMapper = examPaperMapper;
         this.examAnswerMapper = examAnswerMapper;
         this.courseMapper = courseMapper;
         this.accountSupport = accountSupport;
+        this.paperAnswerService = paperAnswerService;
+    }
+
+    /**
+     * 我的答卷详情：只允许查看本人的答卷，复用教师端的详情组装逻辑。
+     */
+    public PaperAnswerDetailVO myAnswerDetail(Long answerId) {
+        Long studentId = accountSupport.requireCurrentUserId();
+        ExamAnswer answer = examAnswerMapper.selectById(answerId);
+        if (answer == null || !Objects.equals(answer.getStudentId(), studentId)) {
+            throw new BusinessException("答卷不存在或无权查看");
+        }
+        return paperAnswerService.getDetail(answerId);
     }
 
     /** 我的试卷：所在班级的整班下发 + 直接指定给我的下发。 */

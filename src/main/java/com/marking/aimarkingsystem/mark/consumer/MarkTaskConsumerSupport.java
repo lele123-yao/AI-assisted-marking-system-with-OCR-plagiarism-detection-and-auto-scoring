@@ -78,7 +78,7 @@ public abstract class MarkTaskConsumerSupport {
         // requeue=false → 消息不会回到当前队列；队列配置了 x-dead-letter-exchange → 进 DLX → DLQ
         channel.basicNack(deliveryTag, false, false);
         log.warn("[{}] 消费失败已 nack 到 DLQ: taskNo={}, reason={}",
-                getTaskType(), task.getTaskNo(), reason);
+                getTaskType(), task == null ? "?" : task.getTaskNo(), reason);
     }
 
     // ==================== 3. mark_task 状态回写 ====================

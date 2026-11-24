@@ -20,7 +20,11 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeUnit;
@@ -66,10 +70,25 @@ public class MinioUtil {
     @Value("${minio.presigned-expiry:3600}")
     private int presignedExpiry;
 
+    /** 本地回退存储目录（MinIO 不可用时落盘到这里） */
+    @Value("${storage.local-dir:./data/uploads}")
+    private String localDir;
+
+    /** 本地文件的访问前缀，默认走 /api/files，前端无需额外配置 */
+    @Value("${storage.local-url-prefix:/api/files}")
+    private String localUrlPrefix;
+
+    /** MinIO 不可用时是否自动回退到本地磁盘（面试演示环境建议开启） */
+    @Value("${storage.fallback-to-local:true}")
+    private boolean fallbackToLocal;
+
     private MinioClient client;
 
     /** 桶是否已确认存在，避免每次上传都调一次 bucketExists */
     private volatile boolean bucketReady = false;
+
+    /** 已回退到本地磁盘存储（本进程内一旦判定 MinIO 不可用就不再重试） */
+    private volatile boolean localMode = false;
 
     @PostConstruct
     public void init() {
@@ -96,6 +115,10 @@ public class MinioUtil {
         ensureBucket();
 
         String objectName = buildObjectName(directory, file.getOriginalFilename());
+        if (localMode) {
+            saveLocal(objectName, file);
+            return objectName;
+        }
         try (InputStream in = file.getInputStream()) {
             client.putObject(PutObjectArgs.builder()
                     .bucket(bucket)
@@ -106,6 +129,11 @@ public class MinioUtil {
                     .build());
             return objectName;
         } catch (Exception e) {
+            if (fallbackToLocal) {
+                switchToLocal("上传", e);
+                saveLocal(objectName, file);
+                return objectName;
+            }
             log.error("MinIO 上传失败, object={}", objectName, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "文件上传失败：" + e.getMessage());
         }
@@ -130,6 +158,10 @@ public class MinioUtil {
         ensureBucket();
 
         String objectName = buildObjectName(directory, originalFilename);
+        if (localMode) {
+            saveLocal(objectName, content);
+            return objectName;
+        }
         try (InputStream in = new ByteArrayInputStream(content)) {
             client.putObject(PutObjectArgs.builder()
                     .bucket(bucket)
@@ -140,6 +172,11 @@ public class MinioUtil {
                     .build());
             return objectName;
         } catch (Exception e) {
+            if (fallbackToLocal) {
+                switchToLocal("字节上传", e);
+                saveLocal(objectName, content);
+                return objectName;
+            }
             log.error("MinIO 字节上传失败, object={}, size={}B", objectName, content.length, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "文件上传失败：" + e.getMessage());
         }
@@ -150,6 +187,14 @@ public class MinioUtil {
      */
     public InputStream download(String objectName) {
         requireObjectName(objectName);
+        Path local = localPath(objectName);
+        if (Files.exists(local)) {
+            try {
+                return Files.newInputStream(local);
+            } catch (IOException e) {
+                throw new BusinessException(ResultCode.SYSTEM_ERROR, "文件读取失败：" + e.getMessage());
+            }
+        }
         try {
             return client.getObject(GetObjectArgs.builder()
                     .bucket(bucket)
@@ -166,6 +211,17 @@ public class MinioUtil {
      */
     public void delete(String objectName) {
         requireObjectName(objectName);
+        Path local = localPath(objectName);
+        if (Files.exists(local)) {
+            try {
+                Files.delete(local);
+            } catch (IOException e) {
+                log.warn("本地文件删除失败, path={}, err={}", local, e.getMessage());
+            }
+        }
+        if (localMode) {
+            return;
+        }
         try {
             client.removeObject(RemoveObjectArgs.builder()
                     .bucket(bucket)
@@ -191,6 +247,12 @@ public class MinioUtil {
      */
     public String getPresignedUrl(String objectName, int expireSeconds) {
         requireObjectName(objectName);
+        if (Files.exists(localPath(objectName)) || localMode) {
+            String prefix = localUrlPrefix.endsWith("/")
+                    ? localUrlPrefix.substring(0, localUrlPrefix.length() - 1)
+                    : localUrlPrefix;
+            return prefix + "/" + objectName;
+        }
         if (expireSeconds <= 0 || expireSeconds > MAX_EXPIRY_SECONDS) {
             throw new BusinessException("签名有效期必须在 1 秒到 7 天之间");
         }
@@ -210,6 +272,12 @@ public class MinioUtil {
     /** 对象是否存在（用于下载前判断，可选调用） */
     public boolean exists(String objectName) {
         if (!StringUtils.hasText(objectName)) {
+            return false;
+        }
+        if (Files.exists(localPath(objectName))) {
+            return true;
+        }
+        if (localMode) {
             return false;
         }
         try {
@@ -232,7 +300,7 @@ public class MinioUtil {
 
     /** 确保桶存在；只在首次上传时执行一次 */
     private synchronized void ensureBucket() {
-        if (bucketReady) {
+        if (bucketReady || localMode) {
             return;
         }
         try {
@@ -243,9 +311,52 @@ public class MinioUtil {
             }
             bucketReady = true;
         } catch (Exception e) {
+            if (fallbackToLocal) {
+                switchToLocal("建桶检查", e);
+                return;
+            }
             log.error("MinIO 连接或建桶失败, endpoint={}, bucket={}", endpoint, bucket, e);
             throw new BusinessException(ResultCode.SYSTEM_ERROR, "MinIO 存储不可用：" + e.getMessage());
         }
+    }
+
+    /** 切换到本地磁盘存储（进程内只提示一次） */
+    private void switchToLocal(String scene, Exception cause) {
+        localMode = true;
+        log.warn("MinIO 不可用（{}），已回退到本地文件存储: dir={}, reason={}",
+                scene, localDir, cause.getMessage());
+    }
+
+    /** 本地文件绝对路径，同时拦截 ../ 之类的越界访问 */
+    private Path localPath(String objectName) {
+        Path base = Paths.get(localDir).toAbsolutePath().normalize();
+        Path target = base.resolve(objectName).normalize();
+        if (!target.startsWith(base)) {
+            throw new BusinessException("非法的文件路径");
+        }
+        return target;
+    }
+
+    private void saveLocal(String objectName, MultipartFile file) {
+        try (InputStream in = file.getInputStream()) {
+            saveLocal(objectName, in);
+        } catch (IOException e) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "本地文件保存失败：" + e.getMessage());
+        }
+    }
+
+    private void saveLocal(String objectName, byte[] content) {
+        try {
+            saveLocal(objectName, new ByteArrayInputStream(content));
+        } catch (IOException e) {
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "本地文件保存失败：" + e.getMessage());
+        }
+    }
+
+    private void saveLocal(String objectName, InputStream in) throws IOException {
+        Path target = localPath(objectName);
+        Files.createDirectories(target.getParent());
+        Files.copy(in, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
 
     /** 生成对象键：目录/年/月/日/UUID.扩展名，避免同名覆盖并便于按日期归档 */

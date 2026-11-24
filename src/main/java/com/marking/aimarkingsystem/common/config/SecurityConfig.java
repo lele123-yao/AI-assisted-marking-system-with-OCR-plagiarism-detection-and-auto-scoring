@@ -54,7 +54,9 @@ public class SecurityConfig {
             "/swagger-resources/**",
             "/favicon.ico",
             // 错误转发
-            "/error"
+            "/error",
+            // 本地文件存储回退（无 MinIO 时由后端直出文件，图片/PPT 下载需要免登录）
+            "/files/**"
     };
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;

@@ -45,6 +45,9 @@ public class QuestionResultVO implements Serializable {
     @Schema(description = "本题满分", example = "10.00")
     private BigDecimal fullScore;
 
+    @Schema(description = "考生作答原文（线上作答时可用）")
+    private String studentAnswer;
+
     @Schema(description = "AI 参考分，未阅卷时为空", example = "8.50")
     private BigDecimal aiScore;
 
