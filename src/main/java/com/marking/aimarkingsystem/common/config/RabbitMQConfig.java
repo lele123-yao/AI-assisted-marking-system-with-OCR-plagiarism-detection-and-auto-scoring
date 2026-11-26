@@ -157,7 +157,10 @@ public class RabbitMQConfig {
     @Bean
     public MessageConverter messageConverter() {
         return new Jackson2JsonMessageConverter(
-                "java.util", "java.lang", "com.marking.aimarkingsystem.mark.dto");
+                "java.util", "java.lang",
+                "com.marking.aimarkingsystem.mark.dto",
+                // 阅卷完成通知事件：Fanout 广播到各实例的匿名队列，反序列化需要放行该包
+                "com.marking.aimarkingsystem.notify.mq");
     }
 
     // ==================== 4. RabbitTemplate：生产者 ConfirmCallback + ReturnCallback ====================

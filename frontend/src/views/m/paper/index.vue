@@ -1,12 +1,12 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   changePaperStatus,
   createPaper,
+  deletePaper,
   pagePapers,
-  parsePaperFiles,
   updatePaper
 } from '@/api/paper'
 import { pageCourses } from '@/api/course'
@@ -19,6 +19,8 @@ import MobileSearchBar from '@/components/m/MobileSearchBar.vue'
 import MobileEmpty from '@/components/m/MobileEmpty.vue'
 import MobileLoadMore from '@/components/m/MobileLoadMore.vue'
 import MobileSheet from '@/components/m/MobileSheet.vue'
+import PaperParsePanel from '@/components/m/PaperParsePanel.vue'
+import { batchSaveQuestions } from '@/api/question'
 
 /** 试卷管理：草稿维护、状态单向推进、下发与素材解析 */
 const router = useRouter()
@@ -84,57 +86,16 @@ const rules = {
   ]
 }
 
-// 素材解析
-const parseInputRef = ref()
-const pdfInputRef = ref()
-const parseFiles = ref([])
-const parsing = ref(false)
-const filesParsed = ref(false)
-const parseWarnings = ref([])
-const parsedCount = ref(0)
+// 素材解析：上传 → 预览 → 逐题校对，面板只维护内存数据，保存试卷时才批量入库
+const parsePanelRef = ref()
 
 function resetParseState() {
-  parseFiles.value = []
-  parsing.value = false
-  filesParsed.value = false
-  parseWarnings.value = []
-  parsedCount.value = 0
-  if (parseInputRef.value) parseInputRef.value.value = ''
-  if (pdfInputRef.value) pdfInputRef.value.value = ''
+  parsePanelRef.value?.reset()
 }
 
-function onFilesChange(event) {
-  // 微信里图片和 PDF 走两个不同的 input，这里合并成一次解析
-  const picked = Array.from(event.target.files || [])
-  parseFiles.value = [...parseFiles.value, ...picked]
-  event.target.value = ''
-  filesParsed.value = false
-  parsedCount.value = 0
-  parseWarnings.value = []
-}
-
-async function handleParse() {
-  if (!parseFiles.value.length) {
-    ElMessage.warning('请先选择 PDF 或图片文件')
-    return
-  }
-  parsing.value = true
-  try {
-    const data = await parsePaperFiles(parseFiles.value)
-    filesParsed.value = true
-    if (data?.pdfUrl) form.pdfUrl = data.pdfUrl
-    if (data?.imageUrls?.length) form.imageUrl = JSON.stringify(data.imageUrls)
-    parseWarnings.value = data?.warnings || []
-    const count = (data?.questions || []).length
-    parsedCount.value = count
-    if (count) {
-      ElMessage.success(`识别到 ${count} 道题，可前往「题目管理」核对`)
-    } else {
-      ElMessage.warning('未识别到题目，可在题目管理中手动录入')
-    }
-  } finally {
-    parsing.value = false
-  }
+function onParsed(data) {
+  if (data?.pdfUrl) form.pdfUrl = data.pdfUrl
+  if (data?.imageUrls?.length) form.imageUrl = JSON.stringify(data.imageUrls)
 }
 
 function resetForm() {
@@ -159,6 +120,8 @@ function openCreate() {
   editingId.value = null
   resetForm()
   sheetVisible.value = true
+  // 面板在弹层内，首次打开时还没挂载，等渲染后再清空上一次的解析结果
+  nextTick(resetParseState)
   formRef.value?.clearValidate()
 }
 
@@ -180,6 +143,7 @@ function openEdit(row) {
     imageUrl: row.imageUrl || ''
   })
   sheetVisible.value = true
+  nextTick(resetParseState)
   formRef.value?.clearValidate()
 }
 
@@ -187,20 +151,29 @@ async function submit() {
   if (submitting.value) return
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
-  if (parseFiles.value.length && !filesParsed.value) {
+  const panel = parsePanelRef.value
+  if (panel?.files.length && !panel.parsed) {
     ElMessage.warning('已选择文件但尚未解析，请先点击「上传并解析」')
     return
   }
+  // 校对后的题目随试卷一起保存：先建/改草稿拿到 paperId，再整体批量入库
+  const questions = panel?.buildQuestions() || []
   submitting.value = true
   try {
-    if (editingId.value) {
-      await updatePaper(editingId.value, { ...form })
-      ElMessage.success('保存成功')
+    let paperId = editingId.value
+    if (paperId) {
+      await updatePaper(paperId, { ...form })
     } else {
-      await createPaper({ ...form })
-      ElMessage.success('创建成功，当前为草稿')
+      paperId = await createPaper({ ...form })
     }
+    if (questions.length) {
+      await batchSaveQuestions({ paperId, questions })
+    }
+    ElMessage.success(
+      questions.length ? `保存成功，已入库 ${questions.length} 道题` : '创建成功，当前为草稿'
+    )
     sheetVisible.value = false
+    resetParseState()
     load()
   } finally {
     submitting.value = false
@@ -236,6 +209,28 @@ async function handleNextStatus(row) {
 
 function goQuestions(row) {
   router.push({ path: '/m/question', query: { paperId: row.id } })
+}
+
+// 仅草稿可删：已发布试卷与学生作答、成绩统计绑定，只能归档不能删除
+const deletingId = ref(null)
+async function handleDelete(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除试卷「${row.paperTitle}」？其下 ${row.questionCount ?? 0} 道题将一并删除，不可恢复。`,
+      '删除确认',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  deletingId.value = row.id
+  try {
+    await deletePaper(row.id)
+    ElMessage.success('删除成功')
+    load()
+  } finally {
+    deletingId.value = null
+  }
 }
 
 // ==================== 下发试卷 ====================
@@ -384,6 +379,16 @@ onMounted(() => {
             下发
           </el-button>
           <el-button size="small" plain @click="goQuestions(row)">查看题目</el-button>
+          <el-button
+            v-if="row.status === 0"
+            size="small"
+            type="danger"
+            plain
+            :loading="deletingId === row.id"
+            @click="handleDelete(row)"
+          >
+            删除
+          </el-button>
         </div>
       </article>
 
@@ -480,47 +485,7 @@ onMounted(() => {
 
       <div class="parse-section">
         <div class="parse-title">试卷素材与题目（选填）</div>
-        <input
-          ref="parseInputRef"
-          type="file"
-          multiple
-          accept="image/*"
-          class="file-input"
-          @change="onFilesChange"
-        />
-        <input
-          ref="pdfInputRef"
-          type="file"
-          multiple
-          accept="application/pdf,.pdf"
-          class="file-input"
-          @change="onFilesChange"
-        />
-        <div class="upload-actions">
-          <el-button plain @click="parseInputRef?.click()">拍照 / 相册</el-button>
-          <el-button plain @click="pdfInputRef?.click()">选择 PDF 文件</el-button>
-        </div>
-        <p class="upload-tip">
-          支持 PDF 与图片。微信里若只弹出「拍摄 / 从相册选择」，请点「选择 PDF 文件」；
-          仍选不到时点右上角 ··· 用浏览器打开。
-        </p>
-        <p v-if="parseFiles.length" class="file-name">
-          已选择 {{ parseFiles.length }} 个文件，解析约需 3 分钟，请耐心等待。
-        </p>
-        <el-button
-          type="primary"
-          plain
-          :loading="parsing"
-          :disabled="!parseFiles.length"
-          class="parse-btn"
-          @click="handleParse"
-        >
-          {{ parsing ? '解析中，请稍候…' : '上传并解析' }}
-        </el-button>
-        <p v-if="parsedCount" class="file-name">已识别 {{ parsedCount }} 道题</p>
-        <p v-for="(warning, index) in parseWarnings" :key="index" class="warning">
-          {{ warning }}
-        </p>
+        <PaperParsePanel ref="parsePanelRef" @parsed="onParsed" />
         <p v-if="form.pdfUrl || form.imageUrl" class="hint">已保存解析素材。</p>
       </div>
     </MobileSheet>

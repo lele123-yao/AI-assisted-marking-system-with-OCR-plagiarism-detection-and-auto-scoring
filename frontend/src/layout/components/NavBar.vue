@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import Breadcrumb from './Breadcrumb.vue'
+import NotifyBell from '@/components/NotifyBell.vue'
 import { useUserStore } from '@/store/user'
 import { setPreferDesktop } from '@/utils/device'
 
@@ -59,6 +60,8 @@ function handleCommand(command) {
     </div>
 
     <div class="navbar-right">
+      <!-- 阅卷完成实时通知：铃铛 + 未读数角标 -->
+      <NotifyBell />
       <el-tag type="info" effect="plain" class="role-tag">{{ roleText }}</el-tag>
       <el-dropdown trigger="click" @command="handleCommand">
         <span class="user-info">

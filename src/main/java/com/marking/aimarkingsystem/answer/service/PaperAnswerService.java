@@ -51,6 +51,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -539,6 +540,8 @@ public class PaperAnswerService {
         Map<Long, BigDecimal> legacyScores = new HashMap<>();
         Map<Long, String> legacyComments = new HashMap<>();
         Map<Long, String> studentAnswers = new HashMap<>();
+        Map<Long, List<Map<String, Object>>> pointsByQuestion = new HashMap<>();
+        Map<Long, String> gradedByByQuestion = new HashMap<>();
         if (StringUtils.hasText(answer.getAnswerContent())) {
             String content = answer.getAnswerContent().trim();
             try {
@@ -553,6 +556,27 @@ public class PaperAnswerService {
                         String studentAnswer = object.getStr("answer");
                         if (StringUtils.hasText(studentAnswer)) {
                             studentAnswers.put(questionId, studentAnswer);
+                        }
+                        // 得分点明细与判分来源：让教师能核对"这一分是怎么来的"
+                        JSONArray pointArray = object.getJSONArray("points");
+                        if (pointArray != null && !pointArray.isEmpty()) {
+                            List<Map<String, Object>> pointList = new ArrayList<>();
+                            for (int j = 0; j < pointArray.size(); j++) {
+                                JSONObject point = pointArray.getJSONObject(j);
+                                if (point == null) {
+                                    continue;
+                                }
+                                Map<String, Object> detail = new HashMap<>();
+                                detail.put("item", point.getStr("item", ""));
+                                detail.put("hit", point.getBool("hit", false));
+                                detail.put("score", point.getBigDecimal("score"));
+                                pointList.add(detail);
+                            }
+                            pointsByQuestion.put(questionId, pointList);
+                        }
+                        String gradedBy = object.getStr("gradedBy");
+                        if (StringUtils.hasText(gradedBy)) {
+                            gradedByByQuestion.put(questionId, gradedBy);
                         }
                         if (itemMap.isEmpty()) {
                             if (object.get("score") != null) {
@@ -608,6 +632,8 @@ public class PaperAnswerService {
                 vo.setAiScore(legacyScores.get(question.getId()));
                 vo.setAiComment(legacyComments.get(question.getId()));
             }
+            vo.setPoints(pointsByQuestion.get(question.getId()));
+            vo.setGradedBy(gradedByByQuestion.get(question.getId()));
             return vo;
         }).toList();
     }

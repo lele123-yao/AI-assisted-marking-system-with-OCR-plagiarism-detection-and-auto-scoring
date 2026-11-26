@@ -6,6 +6,8 @@ import lombok.Data;
 import java.io.Serial;
 import java.io.Serializable;
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 答卷逐题结果 VO：把题目信息、AI 结果、教师结果组装在一起返回给前端。
@@ -59,4 +61,10 @@ public class QuestionResultVO implements Serializable {
 
     @Schema(description = "教师最终评语")
     private String finalComment;
+
+    @Schema(description = "AI 逐得分点明细（细则条目、是否命中、该点得分）；规则判分时为空")
+    private List<Map<String, Object>> points;
+
+    @Schema(description = "判分来源：RULE 规则判分，LLM 大模型判分")
+    private String gradedBy;
 }

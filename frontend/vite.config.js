@@ -24,6 +24,13 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_PROXY_TARGET || 'http://localhost:8080',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, '')
+        },
+        // WebSocket 实时通知：浏览器直连 /ws/mark，开发期由 Vite 代理到后端。
+        // ws: true 让代理支持协议升级；注意不能 rewrite，后端路径就是 /ws/mark。
+        '/ws': {
+          target: env.VITE_PROXY_TARGET || 'http://localhost:8080',
+          changeOrigin: true,
+          ws: true
         }
       }
     },

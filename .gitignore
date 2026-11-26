@@ -65,3 +65,10 @@ agent-interview-cheatsheet.html
 agent-v2-interview-playbook.html
 resume-and-interview-full-guide.html
 software-design-deep-dive.html
+
+### Python（Flask OCR 服务） ###
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

@@ -8,9 +8,10 @@ spring:
   # ==================== 数据源（MyBatis-Plus 依赖它） ====================
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/ai_marking?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: root
-    password: 20060302
+    # 全部支持环境变量覆盖，别人克隆仓库后无需改代码即可接入自己的本地环境
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ai_marking?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:20060302}
     hikari:
       # 连接池最大/最小连接数，按需调整
       maximum-pool-size: 10
@@ -30,11 +31,11 @@ spring:
   # ==================== Redis ====================
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
       database: 0
       # 没有密码时留空即可
-      password:
+      password: ${REDIS_PASSWORD:}
       # 连接超时时间
       timeout: 5s
       lettuce:
@@ -45,10 +46,10 @@ spring:
 
   # ==================== RabbitMQ（模块4：异步AI阅卷 / OCR识别） ====================
   rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
     # guest 账号默认只允许 localhost 连接；远程部署需在 RabbitMQ 中新建账号并授权该 vhost
     virtual-host: /
     connection-timeout: 5s
@@ -77,13 +78,40 @@ spring:
 # ==================== 试卷上传解析（模块：试卷管理） ====================
 # PDF 使用 PDFBox 提取文本层；图片走可插拔 OCR HTTP 接口。
 # 未配置 ocr-url 时图片仍会上传成功，但解析结果会提示"请手动录入题目"。
+# 本地离线 OCR：cd tools/ocr-server && pip install -r requirements.txt
+#   开发启动：python server.py
+#   生产启动：gunicorn -c gunicorn.conf.py server:app（多进程 + 多线程，单进程并发上限见 OCR_MAX_CONCURRENCY）
+# 然后设置 PAPER_OCR_URL=http://localhost:9100/ocr 并重启后端即可识别中文试卷/答卷图片。
 paper-parse:
-  # OCR 服务地址，留空表示未配置（例如：http://localhost:9000/ocr）
+  # 试卷/题目上传解析是否调用大模型，默认 false：
+  # false = 只用本地 OCR + 规则拆分，完全免费、不发起任何大模型请求；
+  # true  = 规则失败时才调大模型（可在「大模型设置」填免费模型的 Key 与地址）。
+  llm-enabled: ${PAPER_PARSE_LLM_ENABLED:false}
+  # OCR 服务地址，留空表示未配置（本地服务：http://localhost:9100/ocr）
   ocr-url: ${PAPER_OCR_URL:}
   # OCR 服务鉴权 Key，留空则不发送鉴权头
   ocr-api-key: ${PAPER_OCR_API_KEY:}
+  # 近重复图片判定：dHash 汉明距离 ≤ 该值视为同一页（重拍/压缩/轻微旋转可识别），0 关闭
+  duplicate-hamming-distance: ${PAPER_PARSE_DUPLICATE_DISTANCE:6}
+  # 单次解析任务的总时长预算（秒），超出后剩余图片标记失败，避免个别图片无限拖延
+  task-timeout-seconds: ${PAPER_PARSE_TASK_TIMEOUT:120}
+  # 多页文本去重：题号相同且题干相似度达到该值视为同一题
+  merge-similarity: ${PAPER_PARSE_MERGE_SIMILARITY:0.58}
   # 单文件大小上限，与 spring.servlet.multipart 保持一致
   max-file-size: 20MB
+
+# ==================== AI 阅卷（模块4：题目批改） ====================
+mark:
+  # 主观题评分采样次数：2 = 双采样一致性校验（两次偏差超过满分 10% 标记人工复核）；
+  # 1 = 单次调用，节省大模型额度
+  subjective-samples: ${MARK_SUBJECTIVE_SAMPLES:2}
+  # 任务补偿：停在待消费/处理中超过该分钟数视为执行中断，由定时任务自动重新投递
+  task-timeout-minutes: ${MARK_TASK_TIMEOUT_MINUTES:15}
+  # 失败待重试(3)的任务冷却多久后自动重投，避免刚失败就立刻重试
+  retry-backoff-minutes: ${MARK_RETRY_BACKOFF_MINUTES:3}
+  # 补偿扫描间隔（毫秒），默认 5 分钟；首次延迟 1 分钟
+  recovery-interval-ms: ${MARK_RECOVERY_INTERVAL_MS:300000}
+  recovery-initial-delay-ms: ${MARK_RECOVERY_INITIAL_DELAY_MS:60000}
 
 # ==================== LLM（模块4：AI阅卷 / OCR后处理 / Prompt模板） ====================
 # 当前默认使用 DeepSeek 官方 API，后续若接入智谱/通义等，只需调整 provider 标识与 api-url，
@@ -102,7 +130,7 @@ llm:
 # ==================== JWT ====================
 jwt:
   # HS256 要求密钥至少 32 字节；生产环境务必通过环境变量覆盖，不要把真实密钥提交到仓库
-  secret: ai-marking-system-jwt-secret-key-2026-please-change-in-production
+  secret: ${JWT_SECRET:ai-marking-system-jwt-secret-key-2026-please-change-in-production}
   # token 有效期，单位毫秒，当前为 30 分钟（同时作为 Redis 会话的 TTL）
   expiration: 1800000
 
@@ -130,9 +158,9 @@ mybatis-plus:
 # ==================== MinIO 对象存储 ====================
 minio:
   # MinIO 服务地址，末尾不要带斜杠；生产环境用环境变量覆盖
-  endpoint: http://localhost:9000
-  access-key: minioadmin
-  secret-key: minioadmin
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
   # 存放答卷图片/扫描件的桶；首次上传时若不存在会自动创建
   bucket: ai-marking
   # 预签名 URL 有效期（秒），默认 1 小时。
@@ -147,25 +175,24 @@ storage:
   local-dir: ./data/uploads
   local-url-prefix: /api/files
 
-# ==================== Sentinel（本阶段仅预留，全部注释，暂不启用） ====================
-# 用途：模块4 后续阶段对 MQ 消费速率、AI/OCR 下游调用做限流与熔断降级，
-#       防止"班级集中交卷 -> 瞬间几百条阅卷消息 -> 大模型 API 被打爆"。
-# 当前只引入了 sentinel-core / sentinel-annotation-aspectj 两个依赖，
-# 不接入 Sentinel Dashboard 时无需任何 yml 配置，规则可直接用代码（FlowRuleManager）加载。
-#
-# 若后续要接 Dashboard 做可视化管理，再取消下面注释并启动 dashboard：
-# sentinel:
-#   transport:
-#     # Sentinel Dashboard 地址（需单独部署 sentinel-dashboard.jar）
-#     dashboard: localhost:8080
-#     # 本应用与 dashboard 通信的本地端口
-#     port: 8719
-#   # 启动即向 dashboard 注册心跳
-#   eager: true
-#   # 限流规则示例（也可在 dashboard 页面配置，无需写在 yml）：
-#   # - resource: aiMarkConsumer   # @SentinelResource 标注的资源名
-#   #   grade: 1                   # 1 = QPS 限流
-#   #   count: 5                   # 每秒最多 5 次，超出部分排队或降级
+# ==================== Sentinel（MQ 消费限流 + 大模型熔断） ====================
+# 规则由 SentinelConfig 在启动时用 FlowRuleManager / DegradeRuleManager 加载，不依赖 Dashboard。
+# 每个阈值都可用同名环境变量覆盖，便于不同部署环境调整而无需改代码。
+sentinel:
+  # AI 阅卷消费者每秒最多进入的条数（超出走 markFailed + 死信，由定时补偿任务削峰）
+  ai-mark-qps: ${SENTINEL_AI_MARK_QPS:5}
+  # OCR 消费者每秒最多进入的条数
+  ocr-qps: ${SENTINEL_OCR_QPS:5}
+  # 大模型调用每秒最多请求数
+  llm-qps: ${SENTINEL_LLM_QPS:10}
+  # 熔断：统计窗口内异常比例达到该值即熔断（0.5 = 50%）
+  llm-error-ratio: ${SENTINEL_LLM_ERROR_RATIO:0.5}
+  # 熔断：窗口内最小请求数，样本不足时不熔断
+  llm-min-request-amount: ${SENTINEL_LLM_MIN_REQUEST:5}
+  # 熔断：统计窗口长度（毫秒）
+  llm-stat-interval-ms: ${SENTINEL_LLM_STAT_INTERVAL_MS:10000}
+  # 熔断：熔断持续秒数，到期后半开探测恢复
+  llm-degrade-seconds: ${SENTINEL_LLM_DEGRADE_SECONDS:30}
 
 # ==================== 接口限流（模块7：Redis 滑动窗口） ====================
 # 说明：本阶段只提供 RedisSlidingWindowLimiter 工具类，默认不拦截任何接口，

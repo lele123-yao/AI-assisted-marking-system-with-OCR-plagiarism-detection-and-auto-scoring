@@ -1,10 +1,11 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   addQuestion,
   assignKnowledge,
+  batchSaveQuestions,
   deleteQuestion,
   listQuestionsByPaper,
   updateQuestion
@@ -15,6 +16,7 @@ import { QUESTION_TYPE, dictItem } from '@/utils/dict'
 import MobileHero from '@/components/m/MobileHero.vue'
 import MobileEmpty from '@/components/m/MobileEmpty.vue'
 import MobileSheet from '@/components/m/MobileSheet.vue'
+import PaperParsePanel from '@/components/m/PaperParsePanel.vue'
 
 /** 题目管理：先选试卷，再维护题目与知识点 */
 const route = useRoute()
@@ -202,6 +204,49 @@ async function handleDelete(row) {
   }
 }
 
+// ==================== 上传图片 / PDF 识别题目 ====================
+const parseVisible = ref(false)
+const parsePanelRef = ref()
+const importing = ref(false)
+
+function openParse() {
+  if (!paperId.value) {
+    ElMessage.warning('请先选择试卷')
+    return
+  }
+  parseVisible.value = true
+  nextTick(() => parsePanelRef.value?.reset())
+}
+
+async function confirmImport() {
+  const questions = parsePanelRef.value?.buildQuestions() || []
+  if (!questions.length) {
+    ElMessage.warning('请先上传并解析，或手动补录题目')
+    return
+  }
+  // 后端 /questions/batch 是整体替换语义，已有题目时必须明示，避免误清空
+  if (list.value.length) {
+    try {
+      await ElMessageBox.confirm(
+        `入库将替换该试卷现有 ${list.value.length} 道题，确认用识别出的 ${questions.length} 道题覆盖？`,
+        '整体替换提醒',
+        { type: 'warning' }
+      )
+    } catch {
+      return
+    }
+  }
+  importing.value = true
+  try {
+    await batchSaveQuestions({ paperId: paperId.value, questions })
+    ElMessage.success(`已入库 ${questions.length} 道题`)
+    parseVisible.value = false
+    loadQuestions()
+  } finally {
+    importing.value = false
+  }
+}
+
 onMounted(async () => {
   await loadPapers()
   loadTemplates()
@@ -217,6 +262,7 @@ onMounted(async () => {
       icon="EditPen"
     >
       <template #actions>
+        <el-button size="small" plain @click="openParse">上传识别</el-button>
         <el-button size="small" type="primary" @click="openCreate">新增</el-button>
       </template>
     </MobileHero>
@@ -370,6 +416,18 @@ onMounted(async () => {
           <p class="tip">后端未提供知识点字典接口，此处按知识点 ID 绑定。</p>
         </el-form-item>
       </el-form>
+    </MobileSheet>
+
+    <!-- 上传图片 / PDF 识别题目：预览校对后整体入库 -->
+    <MobileSheet
+      v-model="parseVisible"
+      title="上传图片 / PDF 识别题目"
+      height="92%"
+      confirm-text="校对完成，入库"
+      :loading="importing"
+      @confirm="confirmImport"
+    >
+      <PaperParsePanel ref="parsePanelRef" />
     </MobileSheet>
   </div>
 </template>

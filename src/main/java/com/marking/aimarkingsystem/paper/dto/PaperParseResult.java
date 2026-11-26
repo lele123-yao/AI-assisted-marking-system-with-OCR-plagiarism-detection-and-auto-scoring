@@ -39,6 +39,9 @@ public class PaperParseResult implements Serializable {
     @Schema(description = "非致命提示信息")
     private List<String> warnings;
 
+    @Schema(description = "逐文件识别状态（成功/失败/重复跳过）")
+    private List<PageParseStatus> pages;
+
     @Schema(description = "解析出的题目草稿")
     private List<ParsedQuestionDTO> questions;
 }

@@ -12,6 +12,7 @@ import com.marking.aimarkingsystem.mark.service.MarkTaskProducerService;
 import com.marking.aimarkingsystem.plagiarism.service.PlagiarismService;
 import com.marking.aimarkingsystem.common.util.MinioUtil;
 import com.marking.aimarkingsystem.common.util.RedisDistributedLock;
+import com.marking.aimarkingsystem.paper.util.OcrClient;
 import com.rabbitmq.client.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +21,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * OCR 识别消费者（模块4-阶段4）。
@@ -31,7 +33,7 @@ import java.io.IOException;
  * 4. 把识别结果写回 exam_answer.ocr_text，推进 markingStatus → AI_MARKING（状态 2，等待 AI 阅卷）；
  * 5. 成功 mark_task status=2 + ack；失败 retry_count++ → 超过 MAX_RETRY 进死信队列。
  *
- * Sentinel 占位：@SentinelResource(value="ocrConsumer", blockHandler="onBlocked")。
+ * Sentinel：@SentinelResource(value="ocrConsumer", blockHandler="onBlocked")，规则由 SentinelConfig 加载。
  */
 @Component
 public class OcrConsumer extends MarkTaskConsumerSupport {
@@ -49,19 +51,22 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
     private final MarkTaskProducerService markTaskProducerService;
     private final PlagiarismService plagiarismService;
     private final RedisDistributedLock distributedLock;
+    private final OcrClient ocrClient;
 
     public OcrConsumer(MarkTaskMapper markTaskMapper,
                        ExamAnswerMapper examAnswerMapper,
                        MinioUtil minioUtil,
                        MarkTaskProducerService markTaskProducerService,
                        PlagiarismService plagiarismService,
-                       RedisDistributedLock distributedLock) {
+                       RedisDistributedLock distributedLock,
+                       OcrClient ocrClient) {
         super(markTaskMapper);
         this.examAnswerMapper = examAnswerMapper;
         this.minioUtil = minioUtil;
         this.markTaskProducerService = markTaskProducerService;
         this.plagiarismService = plagiarismService;
         this.distributedLock = distributedLock;
+        this.ocrClient = ocrClient;
     }
 
     @RabbitListener(queues = "${mq.ocr.queue:marking.ocr.queue}")
@@ -156,35 +161,40 @@ public class OcrConsumer extends MarkTaskConsumerSupport {
         }
     }
 
-    /** Sentinel 熔断回调 */
-    public String onBlocked(Message message, Channel channel, BlockException ex) {
+    /**
+     * Sentinel 限流/熔断回调。
+     *
+     * 返回值必须与 consume 一致（void），否则 Sentinel 反射校验失败；
+     * 回写任务失败 + nack 进死信，由定时补偿任务稍后重投，避免消息 requeue 热循环。
+     */
+    public void onBlocked(Message message, Channel channel, BlockException ex) {
         log.warn("OCR 消费者被 Sentinel 拦截: {}", ex.getRule());
-        return "BLOCKED: " + ex.getRule();
+        handleBlocked(message, channel, "Sentinel 限流/熔断: " + ex.getClass().getSimpleName());
     }
 
     // ==================== OCR 调用接口占位 ====================
 
     /**
-     * 调用第三方 OCR 服务（本阶段只打日志，返回模拟识别文本）。
+     * 调用配置的 OCR 服务识别整份答卷图片。
      *
-     * 模块5接入真实服务时，替换这里的实现即可：
-     * - 用 MinioUtil.getPresignedUrl(objectKey) 拿到图片临时访问地址；
-     * - 调阿里云/腾讯云/百度 AI 的 OCR API；
-     * - 解析返回的识别文本（按行列顺序拼接）。
+     * - 用 MinioUtil.download(objectKey) 读出图片字节；
+     * - 通过 OcrClient 调用配置的 OCR HTTP 服务（paper-parse.ocr-url）；
+     * - 未配置时直接失败重试，不再返回占位文本，避免假数据进入 AI 阅卷。
      *
      * 返回值：整段识别文本（多行用 \n 拼接）。
      * 异常：OCR 服务调用失败抛 RuntimeException，上层 catch 后会进入死信队列。
      */
     private String callOcr(String paperImgObjectKey) {
-        // 模块5 TODO：调用真实 OCR 服务
-        // String imageUrl = minioUtil.getPresignedUrl(paperImgObjectKey);
-        // HttpResponse resp = HttpRequest.post(ALIYUN_OCR_URL).header("Authorization", "Bearer " + API_KEY)
-        //         .body(Map.of("url", imageUrl)).execute();
-        // 解析 resp.body() 里的 text_list 字段拼接到一起返回
-
-        log.warn("OCR 调用占位：模块5接入真实 OCR 服务，当前模拟返回空文本");
-        // 模拟：返回一段占位文本，让后续 AI 阅卷能走通（真实识别结果替换这里即可）
-        return "[OCR 占位] 这是模拟识别文本，模块5将接入真实 OCR 服务替换此实现。";
+        if (!ocrClient.isConfigured()) {
+            throw new IllegalStateException("未配置 OCR 服务（paper-parse.ocr-url），无法识别答卷扫描件");
+        }
+        try (InputStream in = minioUtil.download(paperImgObjectKey)) {
+            String text = ocrClient.recognize(in.readAllBytes(), "answer.jpg");
+            log.info("答卷 OCR 识别完成: objectKey={}, textLength={}", paperImgObjectKey, text.length());
+            return text;
+        } catch (IOException e) {
+            throw new IllegalStateException("读取答卷图片失败: " + e.getMessage(), e);
+        }
     }
 
     @Override

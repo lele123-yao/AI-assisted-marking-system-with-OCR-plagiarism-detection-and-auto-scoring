@@ -14,7 +14,10 @@
 ## ✨ 项目亮点
 
 - 🤖 **AI 全链路**：DeepSeek 大模型驱动主观题自动阅卷、学情讲评正文、讲评 PPT 自动编排
-- 🔄 **异步解耦**：RabbitMQ 消费 AI 阅卷任务，手动 Ack + 限流 + 死信队列，支持后续接入 Sentinel 熔断
+- 🔄 **异步解耦**：RabbitMQ 消费 AI 阅卷任务，手动 Ack + prefetch 限流 + 死信队列 + 定时补偿重投
+- 🛡️ **熔断降级**：Sentinel 对下游大模型做 QPS 限流 + 异常比例熔断，熔断时返回兜底文案，阅卷任务延后重试、绝不写 0 分
+- 📡 **实时通知**：RabbitMQ Fanout + WebSocket，多实例部署下阅卷完成通知实时推送，站内信持久化离线兜底
+- 🧯 **OCR 独立服务**：Flask + RapidOCR 引擎池 + gunicorn，并发打满返回 429 快速失败，由消息队列自动重试
 - 🔍 **答卷查重**：SimHash 指纹两两比对，高风险 / 可疑 / 正常三档报告，可下钻逐份明细
 - 📄 **OCR 可选**：PDFBox 提取 PDF 文本层、图片走可插拔 OCR HTTP 接口；未配置时提示手动录入
 - 🎯 **一页一结构**：前端页面按业务定制视觉骨架（卡片画廊 / 主从双栏 / 卡片墙 / 向导 / 折叠分组），告别同质化
@@ -41,6 +44,9 @@
 | EasyExcel | 考生名单 Excel 批量导入 |
 | PDFBox | PDF 试卷文本层提取 |
 | DeepSeek LLM | Chat Completions 标准协议，可扩展 / 通义 / 智谱 |
+| Sentinel | 1.8.8，下游大模型 QPS 限流 + 异常比例熔断 + 兜底降级 |
+| WebSocket | 原生 TextWebSocketHandler + JWT 握手鉴权 + 多实例广播 |
+| Flask + gunicorn | 独立 OCR 服务，EnginePool 引擎池控制并发 |
 | Lombok | 简化 DTO / Entity |
 
 ### 前端
@@ -64,7 +70,8 @@
 | Redis | 6379 | 会话 / 限流 / 分布式锁 |
 | RabbitMQ | 5672 | guest / guest |
 | MinIO | 9000 | minioadmin / minioadmin |
-| OCR（可选） | —— | 可插拔 HTTP 接口，未配置时跳过 |
+| OCR（可选） | 9100 | Python Flask + RapidOCR，gunicorn 部署 |
+| Nginx（可选） | 80 | 多副本网关，WS 透传，配置见 `deploy/nginx.conf` |
 | 后端 | 8080 | Spring Boot |
 | 前端 | 5173 | Vite dev server |
 
@@ -187,7 +194,7 @@ ai-marking-system/
 | --- | --- | --- |
 | JDK | 21 | pom.xml `<java.version>21</java.version>` |
 | Maven | 3.8+ | 或直接用项目自带 `mvnw` |
-| Node.js | 18+ | 推荐 20 LTS |
+| Node.js | 20.19+ | Vite 7 要求；推荐 22 LTS |
 | npm | 9+ | 或 pnpm / yarn |
 | MySQL | 8.0 | 数据库名 `ai_marking` |
 | Redis | 6.0+ | 默认 0 号 DB |
@@ -197,8 +204,13 @@ ai-marking-system/
 ### 1. 准备数据库与中间件
 
 ```bash
-# 1) MySQL：创建库并导入建表与 mock 数据
+# 1) MySQL：建库建表 + 各模块增量脚本 + mock 数据（按顺序执行）
 mysql -uroot -p < sql/init_schema.sql
+mysql -uroot -p ai_marking < sql/class_module.sql
+mysql -uroot -p ai_marking < sql/paper_parse.sql
+mysql -uroot -p ai_marking < sql/agent_module.sql
+mysql -uroot -p ai_marking < sql/agent_module_v2.sql
+mysql -uroot -p ai_marking < sql/notify_message.sql
 mysql -uroot -p ai_marking < sql/mock_data.sql
 
 # 2) 启动 Redis、RabbitMQ、MinIO（以 Docker 为例）
@@ -282,6 +294,31 @@ npm run build          # 产物 frontend/dist/，直接部署到任意静态服�
 npm run preview        # 本地预览 dist
 ```
 
+### 4. 可选：启动 OCR 服务（图片试卷识别）
+
+```bash
+cd tools/ocr-server
+pip install -r requirements.txt
+
+# 开发（Windows / macOS 均可）
+python server.py
+
+# 生产（Linux，多线程 + 引擎池）
+gunicorn -c gunicorn.conf.py server:app
+```
+
+启动后把后端环境变量 `PAPER_OCR_URL` 指向 `http://localhost:9100/ocr` 即可；服务端并发上限由 `OCR_MAX_CONCURRENCY`（默认 2）控制，超出返回 429，后端会自动转 MQ 重试。
+
+### 5. 可选：Nginx 多副本部署
+
+`deploy/nginx.conf` 已包含后端 8080/8081、OCR 9100/9101 双副本 upstream、WebSocket Upgrade 透传、失败自动切副本与前端 history 回退。起第二个后端实例只需：
+
+```bash
+java -jar target/ai-marking-system-0.0.1-SNAPSHOT.jar --server.port=8081
+```
+
+然后 `nginx -c /绝对路径/deploy/nginx.conf`（注意把配置里的 `root` 改成本机 `frontend/dist` 路径）。
+
 ---
 
 ## ⚙️ 关键配置速查（`src/main/resources/application.yml`）
@@ -337,7 +374,7 @@ logging:
     name: logs/ai-marking-system.log
 ```
 
-> ⚠️ **生产环境清单**：全部密钥（MySQL 密码 / Redis 密码 / MinIO 密钥 / JWT secret / LLM API Key）改为环境变量；把 `mybatis-plus.configuration.log-impl` 从 `StdOutImpl` 改为 `NoLoggingImpl`；启用 Sentinel Dashboard 监控 AI 阅卷链路。
+> ⚠️ **生产环境清单**：全部密钥（MySQL 密码 / Redis 密码 / MinIO 密钥 / JWT secret / LLM API Key）改为环境变量覆盖（`DB_PASSWORD`、`REDIS_PASSWORD`、`MINIO_SECRET_KEY`、`JWT_SECRET` 等，均可直接用同名环境变量替换 yml 默认值）；把 `mybatis-plus.configuration.log-impl` 从 `StdOutImpl` 改为 `NoLoggingImpl`；OCR 用 gunicorn 启动并前置 Nginx 做多副本；Sentinel 规则已在 `SentinelConfig` 内加载，可按需接入 Dashboard 做可视化。
 
 ---
 
@@ -428,7 +465,7 @@ location / {
 ## 📦 后续优化方向
 
 - 🧪 **单元 / 集成测试**：补齐 Mapper Service Controller 三层覆盖，CI 自动跑
-- 📊 **Sentinel 熔断**：为 AI 阅卷 / OCR 下游接入 Dashboard，慢调用比例熔断
+- 📊 **Sentinel 可视化**：规则已在代码内加载（`SentinelConfig`），后续可接入 Dashboard 做慢调用比例熔断与实时监控
 - 🔎 **Embedding / RAG**：DeepSeek Embedding + Milvus / PGVector 向量化，真正意义上的知识库检索
 - 📈 **Kafka 替换 RabbitMQ**：高并发下切换，RabbitMQ 适合轻量、Kafka 适合高吞吐
 - 🏗️ **微服务拆分**：auth / learning / marking / agent 独立服务 + Nacos / Sentinel 注册中心

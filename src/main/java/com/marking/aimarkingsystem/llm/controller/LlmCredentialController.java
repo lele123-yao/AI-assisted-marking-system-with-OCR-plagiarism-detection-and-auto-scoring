@@ -89,6 +89,10 @@ public class LlmCredentialController {
             String reply = llmUtil.chatAs(username,
                     "你是连通性测试助手，请只回复两个字：可用",
                     "请回复：可用");
+            if (DeepSeekLlmUtil.isDegradeNotice(reply)) {
+                // 熔断期间返回的是兜底文案，不能当"连接成功"展示给用户
+                throw new BusinessException("连接失败：AI 服务暂时不可用（限流/熔断降级），请稍后重试");
+            }
             return Result.success("连接成功，模型回复：" + abbreviate(reply, 60));
         } catch (Exception e) {
             log.warn("大模型连接测试失败: user={}, error={}", username, e.getMessage());

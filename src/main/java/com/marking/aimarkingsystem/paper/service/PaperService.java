@@ -7,6 +7,8 @@ import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.ResultCode;
 import com.marking.aimarkingsystem.course.entity.Course;
 import com.marking.aimarkingsystem.course.mapper.CourseMapper;
+import com.marking.aimarkingsystem.knowledge.entity.QuestionKnowledgeRel;
+import com.marking.aimarkingsystem.knowledge.mapper.QuestionKnowledgeRelMapper;
 import com.marking.aimarkingsystem.paper.dto.PaperSaveDTO;
 import com.marking.aimarkingsystem.paper.entity.ExamPaper;
 import com.marking.aimarkingsystem.paper.entity.ExamQuestion;
@@ -80,14 +82,46 @@ public class PaperService {
 
     private final UserMapper userMapper;
 
+    private final QuestionKnowledgeRelMapper knowledgeRelMapper;
+
     public PaperService(ExamPaperMapper examPaperMapper,
                         ExamQuestionMapper examQuestionMapper,
                         CourseMapper courseMapper,
-                        UserMapper userMapper) {
+                        UserMapper userMapper,
+                        QuestionKnowledgeRelMapper knowledgeRelMapper) {
         this.examPaperMapper = examPaperMapper;
         this.examQuestionMapper = examQuestionMapper;
         this.courseMapper = courseMapper;
         this.userMapper = userMapper;
+        this.knowledgeRelMapper = knowledgeRelMapper;
+    }
+
+    /**
+     * 删除草稿试卷：连同题目与知识点关联一并清理。
+     *
+     * 只允许删除草稿：试卷一旦发布就会与学生作答、成绩统计绑定，
+     * 删除会破坏历史数据，已结束的试卷应走归档而不是删除。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deletePaper(Long id) {
+        ExamPaper paper = examPaperMapper.selectById(id);
+        if (paper == null) {
+            throw new BusinessException("试卷不存在或已被删除");
+        }
+        if (paper.getStatus() == null || paper.getStatus() != STATUS_DRAFT) {
+            throw new BusinessException("仅草稿状态的试卷可删除，已发布试卷请归档");
+        }
+        List<Long> questionIds = examQuestionMapper.selectList(Wrappers.<ExamQuestion>lambdaQuery()
+                        .eq(ExamQuestion::getPaperId, id))
+                .stream().map(ExamQuestion::getId).toList();
+        if (!questionIds.isEmpty()) {
+            // 先清多对多关联，再删题目，避免留下孤儿知识点关系
+            knowledgeRelMapper.delete(Wrappers.<QuestionKnowledgeRel>lambdaQuery()
+                    .in(QuestionKnowledgeRel::getQuestionId, questionIds));
+            examQuestionMapper.delete(Wrappers.<ExamQuestion>lambdaQuery()
+                    .eq(ExamQuestion::getPaperId, id));
+        }
+        examPaperMapper.deleteById(id);
     }
 
     /**

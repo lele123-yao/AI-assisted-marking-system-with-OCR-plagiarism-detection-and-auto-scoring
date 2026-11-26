@@ -5,12 +5,15 @@ import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.alibaba.csp.sentinel.annotation.SentinelResource;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.marking.aimarkingsystem.llm.service.LlmCredentialStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -36,6 +39,20 @@ import java.util.Map;
 @Slf4j
 @Component
 public class DeepSeekLlmUtil {
+
+    /** 大模型调用在 Sentinel 中的资源名：SentinelConfig 按此名加载限流与熔断规则 */
+    public static final String LLM_RESOURCE = "deepseekChat";
+
+    /**
+     * 限流/熔断降级时返回的兜底文案。
+     *
+     * 为什么返回文案而不是抛异常：
+     * 熔断期间继续往上抛异常，会把同一个"下游不可用"信号放大成各业务自己的失败处理，
+     * 调用方无法区分"模型答错了"和"模型根本没被调用"。返回统一文案后，
+     * 各业务可以据此判断是否降级（如 AI 阅卷延后重试、讲评报告提示稍后再试）。
+     */
+    public static final String DEGRADE_NOTICE =
+            "【AI 服务暂时不可用】大模型接口已限流或熔断，本次请求已降级处理，请稍后重试或改人工处理。";
 
     /** 连接超时（毫秒）：大模型 API 首字节较慢，设 30s */
     private static final int CONNECT_TIMEOUT_MS = 30_000;
@@ -117,6 +134,7 @@ public class DeepSeekLlmUtil {
      * @param systemPrompt 系统提示词（可空）
      * @param userPrompt   用户 prompt（必填）
      */
+    @SentinelResource(value = LLM_RESOURCE, blockHandler = "onBlocked", fallback = "onDegrade")
     public String chatAs(String username, String systemPrompt, String userPrompt) {
         return chatAs(username, null, systemPrompt, userPrompt);
     }
@@ -129,6 +147,7 @@ public class DeepSeekLlmUtil {
      * @param systemPrompt 系统提示词（可空）
      * @param userPrompt   用户 prompt（必填）
      */
+    @SentinelResource(value = LLM_RESOURCE, blockHandler = "onBlocked", fallback = "onDegrade")
     public String chatAs(String username, String model, String systemPrompt, String userPrompt) {
         LlmCredentialStore.Credential credential = credentialStore.resolve(username);
         if (credential == null) {
@@ -143,9 +162,40 @@ public class DeepSeekLlmUtil {
     }
 
     /**
+     * BYOK 调用（可覆盖模型名与采样温度）。
+     *
+     * temperature 来自评分提示词模板：评分场景建议 0~0.3；为 null 时不传，使用服务商默认值。
+     *
+     * @param username     登录用户名（可为 null）
+     * @param model        模型名（可空：优先用用户保存的，其次用 yml 默认值）
+     * @param systemPrompt 系统提示词（可空）
+     * @param userPrompt   用户 prompt（必填）
+     * @param temperature  采样温度（可空）
+     */
+    @SentinelResource(value = LLM_RESOURCE, blockHandler = "onBlocked", fallback = "onDegrade")
+    public String chatAs(String username, String model, String systemPrompt, String userPrompt,
+                         BigDecimal temperature) {
+        LlmCredentialStore.Credential credential = credentialStore.resolve(username);
+        if (credential == null) {
+            throw new IllegalStateException(
+                    "尚未配置大模型 API Key，请先在「大模型设置」页面填写你自己的 API Key");
+        }
+        String resolvedApiUrl = StringUtils.hasText(credential.apiUrl()) ? credential.apiUrl() : apiUrl;
+        String resolvedModel = StringUtils.hasText(model)
+                ? model
+                : (StringUtils.hasText(credential.model()) ? credential.model() : defaultModel);
+        return doChat(credential.apiKey(), resolvedApiUrl, resolvedModel, systemPrompt, userPrompt, temperature);
+    }
+
+    /**
      * 真实发请求的核心实现：显式传入 Key / 地址 / 模型，便于全局配置与 BYOK 两种来源复用。
      */
     private String doChat(String key, String url, String model, String systemPrompt, String userPrompt) {
+        return doChat(key, url, model, systemPrompt, userPrompt, null);
+    }
+
+    private String doChat(String key, String url, String model, String systemPrompt, String userPrompt,
+                          BigDecimal temperature) {
         if (!StringUtils.hasText(userPrompt)) {
             throw new IllegalArgumentException("userPrompt 不能为空");
         }
@@ -156,7 +206,7 @@ public class DeepSeekLlmUtil {
         String resolvedModel = StringUtils.hasText(model) ? model : defaultModel;
         String resolvedSystem = StringUtils.hasText(systemPrompt) ? systemPrompt : null;
 
-        String requestBody = buildRequestBody(resolvedModel, resolvedSystem, userPrompt);
+        String requestBody = buildRequestBody(resolvedModel, resolvedSystem, userPrompt, temperature);
         log.debug("调用 LLM: provider={}, model={}, systemPrompt.len={}, userPrompt.len={}",
                 provider, resolvedModel,
                 resolvedSystem == null ? 0 : resolvedSystem.length(),
@@ -187,14 +237,71 @@ public class DeepSeekLlmUtil {
         }
     }
 
+    // ==================== Sentinel 限流/熔断降级回调 ====================
+
+    /**
+     * 判断一段返回值是否是降级兜底文案。
+     * 调用方据此区分"模型真实输出"和"本次根本没调到模型"，避免把兜底文案当成评分/答案使用。
+     */
+    public static boolean isDegradeNotice(String text) {
+        return DEGRADE_NOTICE.equals(text);
+    }
+
+    /*
+     * blockHandler：被限流或熔断拦截（BlockException）时走这里。
+     * 与业务方法同签名（原参数 + BlockException），返回值类型一致（String）。
+     */
+    public String onBlocked(String username, String systemPrompt, String userPrompt,
+                            BlockException ex) {
+        return degrade(ex);
+    }
+
+    public String onBlocked(String username, String model, String systemPrompt, String userPrompt,
+                            BlockException ex) {
+        return degrade(ex);
+    }
+
+    public String onBlocked(String username, String model, String systemPrompt, String userPrompt,
+                            BigDecimal temperature, BlockException ex) {
+        return degrade(ex);
+    }
+
+    /*
+     * fallback：调用本身失败（超时、5xx、返回脏数据）时走这里。
+     * 只有这里的异常被兜住，Sentinel 的异常比例熔断才能真正累计到失败率。
+     */
+    public String onDegrade(String username, String systemPrompt, String userPrompt, Throwable ex) {
+        return degrade(ex);
+    }
+
+    public String onDegrade(String username, String model, String systemPrompt, String userPrompt,
+                            Throwable ex) {
+        return degrade(ex);
+    }
+
+    public String onDegrade(String username, String model, String systemPrompt, String userPrompt,
+                            BigDecimal temperature, Throwable ex) {
+        return degrade(ex);
+    }
+
+    /** 统一记录降级原因并返回兜底文案（不抛异常，保证调用方拿到可展示的结果） */
+    private String degrade(Throwable ex) {
+        if (ex instanceof BlockException) {
+            log.warn("大模型调用被 Sentinel 拦截，返回降级文案: rule={}", ((BlockException) ex).getRule());
+        } else {
+            log.warn("大模型调用失败，返回降级文案: {}", ex == null ? "unknown" : ex.getMessage());
+        }
+        return DEGRADE_NOTICE;
+    }
+
     // ==================== 内部方法 ====================
 
     /**
      * 构建 DeepSeek Chat Completions 请求体。
-     * 只传 model + messages，stream=false、temperature 不指定（用默认值）；
-     * 后续业务侧需要控制温度、top_p 等时再扩展参数。
+     * stream=false；temperature 有值时才传，评分场景由模板控制（建议 0~0.3）。
      */
-    private String buildRequestBody(String model, String systemPrompt, String userPrompt) {
+    private String buildRequestBody(String model, String systemPrompt, String userPrompt,
+                                    BigDecimal temperature) {
         JSONArray messages = new JSONArray();
         if (StringUtils.hasText(systemPrompt)) {
             messages.add(new JSONObject(Map.of("role", "system", "content", systemPrompt)));
@@ -206,6 +313,9 @@ public class DeepSeekLlmUtil {
         body.put("messages", messages);
         // stream=false：一次性返回整包，方便直接解析
         body.put("stream", false);
+        if (temperature != null) {
+            body.put("temperature", temperature);
+        }
 
         return JSONUtil.toJsonStr(body);
     }

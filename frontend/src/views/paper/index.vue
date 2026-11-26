@@ -180,6 +180,11 @@ async function handleParse() {
     } else {
       ElMessage.warning('未识别到题目，请手动录入')
     }
+  } catch (error) {
+    // HTTP 异常由 request 拦截器统一提示；这里只处理任务失败或轮询超时
+    const message = error?.message || '解析失败，请重试'
+    parseWarnings.value = [message]
+    if (!error?.response) ElMessage.error(message)
   } finally {
     parsing.value = false
   }

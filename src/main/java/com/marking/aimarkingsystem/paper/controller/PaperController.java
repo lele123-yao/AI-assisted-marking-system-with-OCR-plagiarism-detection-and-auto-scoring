@@ -6,9 +6,9 @@ import com.marking.aimarkingsystem.common.exception.BusinessException;
 import com.marking.aimarkingsystem.common.result.PageResult;
 import com.marking.aimarkingsystem.common.result.Result;
 import com.marking.aimarkingsystem.common.util.RedisSlidingWindowLimiter;
-import com.marking.aimarkingsystem.paper.dto.PaperParseResult;
+import com.marking.aimarkingsystem.paper.dto.PaperParseTask;
 import com.marking.aimarkingsystem.paper.dto.PaperSaveDTO;
-import com.marking.aimarkingsystem.paper.service.PaperParseService;
+import com.marking.aimarkingsystem.paper.service.PaperParseTaskService;
 import com.marking.aimarkingsystem.paper.service.PaperService;
 import com.marking.aimarkingsystem.paper.vo.PaperVO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -19,6 +19,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -52,15 +53,15 @@ public class PaperController {
 
     private final PaperService paperService;
 
-    private final PaperParseService paperParseService;
+    private final PaperParseTaskService paperParseTaskService;
 
     private final RedisSlidingWindowLimiter rateLimiter;
 
     public PaperController(PaperService paperService,
-                           PaperParseService paperParseService,
+                           PaperParseTaskService paperParseTaskService,
                            RedisSlidingWindowLimiter rateLimiter) {
         this.paperService = paperService;
-        this.paperParseService = paperParseService;
+        this.paperParseTaskService = paperParseTaskService;
         this.rateLimiter = rateLimiter;
     }
 
@@ -71,6 +72,16 @@ public class PaperController {
     @PostMapping
     public Result<Long> createPaper(@Valid @RequestBody PaperSaveDTO dto) {
         return Result.success("新增成功", paperService.createPaper(dto));
+    }
+
+    @Operation(summary = "删除草稿试卷",
+            description = "仅草稿状态可删除；连同试卷下题目与知识点关联一并清理，已发布试卷请走归档")
+    @OperationLog(module = "试卷管理", action = "删除试卷")
+    @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
+    @DeleteMapping("/{id}")
+    public Result<Void> deletePaper(@Parameter(description = "试卷ID") @PathVariable Long id) {
+        paperService.deletePaper(id);
+        return Result.success();
     }
 
     @Operation(summary = "编辑试卷（草稿保存）",
@@ -85,23 +96,35 @@ public class PaperController {
         return Result.success();
     }
 
-    @Operation(summary = "上传试卷素材并解析题目",
-            description = "支持 PDF（文本层提取）与拍照图片（可配置 OCR）；文件上传 MinIO 后返回对象名与题目草稿。"
-                    + "识别结果仅作辅助，教师确认后通过 POST /questions/batch 入库")
+    @Operation(summary = "提交试卷解析任务（异步）",
+            description = "只做文件校验、上传对象存储与 PDF 文本层提取，秒级返回 taskId；"
+                    + "OCR 在后台逐张执行，前端轮询 GET /papers/parse/async/{taskId} 获取进度与结果。"
+                    + "同一用户已有进行中的任务时直接返回该任务，避免连点重复识别")
     @OperationLog(module = "试卷管理", action = "上传解析试卷")
     @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
-    @PostMapping("/parse")
-    public Result<PaperParseResult> parse(@RequestParam("files") List<MultipartFile> files) {
-        // 解析会同步调用 OCR/大模型，耗时较长，用滑动窗口限流挡住重复点击
-        String username = org.springframework.security.core.context.SecurityContextHolder
-                .getContext().getAuthentication() == null
-                ? "anonymous"
-                : org.springframework.security.core.context.SecurityContextHolder
-                .getContext().getAuthentication().getName();
+    @PostMapping("/parse/async")
+    public Result<PaperParseTask> parseAsync(@RequestParam("files") List<MultipartFile> files) {
+        String username = currentUsername();
+        // 上传仍做滑动窗口限流，挡住脚本高频提交
         if (!rateLimiter.tryAcquire("rate_limit:paper:parse:" + username, 10, 60)) {
             throw new BusinessException("解析请求过于频繁，请稍后再试");
         }
-        return Result.success(paperParseService.parse(files));
+        return Result.success("已提交解析任务", paperParseTaskService.submit(files, username));
+    }
+
+    @Operation(summary = "查询试卷解析任务",
+            description = "返回任务状态（PENDING / RUNNING / SUCCESS / FAILED）、进度与最终题目草稿；仅提交者本人可查")
+    @RequiresPermission({"ROLE_ADMIN", "ROLE_TEACHER"})
+    @GetMapping("/parse/async/{taskId}")
+    public Result<PaperParseTask> getParseTask(
+            @Parameter(description = "任务ID") @PathVariable String taskId) {
+        return Result.success(paperParseTaskService.getTask(taskId, currentUsername()));
+    }
+
+    private String currentUsername() {
+        var authentication = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication();
+        return authentication == null ? "anonymous" : authentication.getName();
     }
 
     @Operation(summary = "分页查询试卷",

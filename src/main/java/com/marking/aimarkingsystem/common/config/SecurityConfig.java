@@ -55,6 +55,9 @@ public class SecurityConfig {
             "/favicon.ico",
             // 错误转发
             "/error",
+            // WebSocket 握手：浏览器无法在 WS 请求中携带 Authorization 头，
+            // 因此这里放行握手路径，由 JwtHandshakeInterceptor 在握手阶段校验 query 中的 token
+            "/ws/**",
             // 本地文件存储回退（无 MinIO 时由后端直出文件，图片/PPT 下载需要免登录）
             "/files/**"
     };

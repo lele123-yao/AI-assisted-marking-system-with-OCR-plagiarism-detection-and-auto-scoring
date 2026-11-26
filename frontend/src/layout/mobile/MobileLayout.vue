@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { menuTree } from '@/config/menu'
+import NotifyBell from '@/components/NotifyBell.vue'
 import { useUserStore } from '@/store/user'
 import { isWeChat } from '@/utils/device'
 
@@ -101,6 +102,8 @@ watch(
         <span>{{ route.meta.title || '智能阅卷' }}</span>
         <small v-if="route.meta.subtitle">{{ route.meta.subtitle }}</small>
       </div>
+
+      <NotifyBell compact />
 
       <button type="button" class="m-nav-btn" @click="menuVisible = true">
         <el-icon :size="20"><Grid /></el-icon>

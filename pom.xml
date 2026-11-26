@@ -173,6 +173,14 @@
             <!-- 版本由 spring-boot-starter-parent 统一管理，无需显式写 -->
         </dependency>
 
+        <!-- ========== WebSocket（阅卷完成实时通知） ========== -->
+        <!-- 说明：阅卷完成后通过 MQ Fanout 广播到各实例，再由各实例的 WebSocket 会话
+             实时推送给在线用户。仅使用原生 WebSocket 端点（/ws/mark），未引入 STOMP。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
+
         <!-- ========== Sentinel（模块4：消费端限流、AI/OCR 下游熔断降级） ========== -->
         <!-- 说明：这里只引入阿里巴巴原生的 sentinel-core 与注解切面，不引入
              spring-cloud-starter-alibaba-sentinel。后者依赖 Spring Cloud 体系，

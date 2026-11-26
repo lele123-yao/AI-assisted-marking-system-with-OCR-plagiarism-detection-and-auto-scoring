@@ -262,6 +262,17 @@ onMounted(loadPapers)
                 <p>{{ resultMap[question.id].aiComment }}</p>
               </div>
 
+              <div v-if="resultMap[question.id]?.points?.length" class="q-ai-points">
+                <span class="ai-label">AI 得分点</span>
+                <ul>
+                  <li v-for="(point, index) in resultMap[question.id].points" :key="index">
+                    <span :class="['p-dot', point.hit ? 'hit' : 'miss']">{{ point.hit ? '✓' : '×' }}</span>
+                    <span class="p-item">{{ point.item }}</span>
+                    <span class="p-score">{{ point.score }} 分</span>
+                  </li>
+                </ul>
+              </div>
+
               <div class="q-input-row">
                 <div class="q-score">
                   <label>得分</label>
@@ -618,6 +629,49 @@ onMounted(loadPapers)
   font-size: 11px;
   font-weight: 600;
   color: #5b6cff;
+}
+
+.q-ai-points {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #f7f8ff;
+  border-radius: 10px;
+}
+
+.q-ai-points ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.q-ai-points li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #4b5563;
+}
+
+.p-dot {
+  font-weight: 700;
+}
+
+.p-dot.hit {
+  color: #16a34a;
+}
+
+.p-dot.miss {
+  color: #dc2626;
+}
+
+.p-item {
+  flex: 1;
+}
+
+.p-score {
+  color: #5b6cff;
+  white-space: nowrap;
 }
 
 .q-ai-comment p {

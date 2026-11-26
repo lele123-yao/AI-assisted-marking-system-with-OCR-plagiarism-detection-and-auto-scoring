@@ -9,9 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-import org.springframework.web.multipart.MultipartFile;
-
-import java.io.IOException;
 
 /**
  * 可插拔 OCR 客户端：把图片 POST 到配置的 HTTP 接口，取回识别文本。
@@ -47,20 +44,19 @@ public class OcrClient {
     }
 
     /**
-     * 识别单张图片。
+     * 识别字节形式的图片：建卷解析与答卷扫描件都从对象存储读出字节后走这里，共用同一个 OCR 服务。
      *
-     * @param file 图片文件
-     * @return 识别文本
-     * @throws BusinessException OCR 未配置或识别失败
+     * @param imageBytes 图片字节
+     * @param filename   文件名，仅用于 multipart 表单
      */
-    public String recognize(MultipartFile file) {
+    public String recognize(byte[] imageBytes, String filename) {
         if (!isConfigured()) {
             throw new BusinessException("未配置 OCR 接口，请手动录入题目");
         }
         try {
             HttpRequest request = HttpRequest.post(ocrUrl)
                     .timeout(TIMEOUT_MS)
-                    .form("file", file.getBytes(), file.getOriginalFilename());
+                    .form("file", imageBytes, filename);
             if (StringUtils.hasText(ocrApiKey)) {
                 request.header("X-API-Key", ocrApiKey);
             }
@@ -74,8 +70,6 @@ public class OcrClient {
             }
         } catch (BusinessException e) {
             throw e;
-        } catch (IOException e) {
-            throw new BusinessException("读取图片失败：" + e.getMessage());
         } catch (Exception e) {
             log.error("OCR 调用异常: url={}", ocrUrl, e);
             throw new BusinessException("OCR 调用异常：" + e.getMessage());

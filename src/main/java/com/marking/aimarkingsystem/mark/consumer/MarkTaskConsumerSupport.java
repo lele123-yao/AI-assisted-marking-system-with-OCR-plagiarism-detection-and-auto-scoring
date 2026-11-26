@@ -32,7 +32,7 @@ public abstract class MarkTaskConsumerSupport {
     private static final Logger log = LoggerFactory.getLogger(MarkTaskConsumerSupport.class);
 
     /** 最大重试次数：3。超过后任务进死信队列，不再自动重试 */
-    protected static final int MAX_RETRY = 3;
+    public static final int MAX_RETRY = 3;
 
     protected final MarkTaskMapper markTaskMapper;
 
@@ -127,6 +127,36 @@ public abstract class MarkTaskConsumerSupport {
                 .set(MarkTask::getFinishTime, LocalDateTime.now()));
         log.warn("[{}] mark_task 失败回写: taskNo={}, retryCount={}, finalFail={}",
                 getTaskType(), task.getTaskNo(), task.getRetryCount(), finalFail);
+    }
+
+    // ==================== Sentinel 限流/熔断回调 ====================
+
+    /**
+     * Sentinel 拦截（限流/熔断）时的统一处理。
+     *
+     * 为什么不直接把消息 requeue？
+     * 被限流说明系统正处于过载状态，原地 requeue 会让消息立刻回到队列头部，
+     * 形成"取出→被拦截→再入队"的热循环，白白消耗 CPU 且不产生任何进展。
+     *
+     * 这里的策略是：mark_task 回写失败（retry_count++），消息 nack 进死信队列，
+     * 再由定时补偿任务（MarkTaskRecoveryService）在冷却期后重新投递，实现"削峰"而不是"空转"。
+     */
+    protected void handleBlocked(Message message, Channel channel, String reason) {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        MarkTask task = null;
+        try {
+            task = requireTask(readTaskNo(message));
+            markFailed(task, reason);
+        } catch (Exception e) {
+            // 任务查不到（DB 异常等）时仍然要把消息处理掉，避免它卡在队列里
+            log.error("[{}] Sentinel 拦截后回写任务状态失败: {}", getTaskType(), e.getMessage());
+        }
+        try {
+            nackToDlq(channel, deliveryTag, task, reason);
+        } catch (IOException e) {
+            log.warn("[{}] Sentinel 拦截后 nack 失败，任务已回写状态: {}",
+                    getTaskType(), e.getMessage());
+        }
     }
 
     // ==================== 4. 抽象方法 ====================

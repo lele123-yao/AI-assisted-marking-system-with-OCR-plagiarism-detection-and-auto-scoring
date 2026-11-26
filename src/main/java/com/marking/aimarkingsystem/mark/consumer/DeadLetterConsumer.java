@@ -17,14 +17,17 @@ import java.io.IOException;
  * 职责：**只打日志 + ack**，不自动重投。
  *
  * 为什么不自动重投？
- * - 进死信队列的消息已经被消费端 retry_count ≥ 3 次了，重投回去只会继续失败再进死信，无限循环；
- * - 这是"毒消息"（答卷已删 / OCR 图片被覆盖 / DB 连接挂了），自动重投解决不了问题；
+ * - 消费端失败后是 nack(requeue=false) 直接进死信，业务侧 retry_count 只记录尝试次数；
+ * - 进死信的多是"毒消息"（答卷已删 / OCR 图片被覆盖 / DB 连接挂了），自动重投只会继续失败；
  * - mark_task 已经被回写为 status=4（已入死信终态）+ error_msg 里有失败原因，
- *   老师打开 mark_task 表就能看到所有死信任务，人工排查后手动重投。
+ *   老师打开 mark_task 表就能看到所有死信任务，人工排查后通过
+ *   POST /mark-tasks/{id}/retry 重投（MarkTaskRecoveryService）。
  *
  * 扩展点（后续可加）：
  * - 邮件/钉钉告警：有新消息进死信队列就通知运维/老师；
- * - 定时任务扫描 status=4 的 mark_task，在后台提供"手动重投"按钮。
+ * - 死信任务处理看板：按 error_msg 聚合失败原因，批量重投。
+ *
+ * 已实现：超时任务补偿由 MarkTaskRecoveryService.recoverStaleTasks() 定时扫描 status=0/1 自动重投。
  *
  * 注意：RabbitMQConfig 里 DLQ 没有配置 x-dead-letter-exchange，
  * 所以 DLQ 不会把消息再投递到任何交换机——这是我们故意防无限循环的设计。
