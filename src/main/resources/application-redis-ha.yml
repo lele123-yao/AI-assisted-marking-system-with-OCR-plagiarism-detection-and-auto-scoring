@@ -1,0 +1,25 @@
+# =====================================================================
+# Redis 主从 + 哨兵（Sentinel）演示 profile
+#
+# 用法：
+#   ./mvnw spring-boot:run "-Dspring-boot.run.profiles=redis-ha"
+#   或 java -jar target/xxx.jar --spring.profiles.active=redis-ha
+#
+# 前置：先启动哨兵集群
+#   cd deploy/redis-ha && docker compose up -d
+#
+# 说明：哨兵模式下 spring.data.redis.host/port 不再生效，
+#      Lettuce 会从哨兵获取当前主节点地址，主节点故障切换后自动重连。
+# 生产环境请用环境变量覆盖密码与哨兵地址，不要把真实密码写进仓库。
+# =====================================================================
+spring:
+  data:
+    redis:
+      # 主节点密码（本编排默认 redispass，与 deploy/redis-ha/docker-compose.yml 保持一致）
+      password: ${REDIS_PASSWORD:redispass}
+      timeout: 5s
+      sentinel:
+        # 哨兵中配置的主节点名称，必须与 sentinel monitor 后的名字一致
+        master: ${REDIS_SENTINEL_MASTER:mymaster}
+        # 哨兵节点列表（host:port），多个用逗号分隔；任取可用节点即可发现整个集群
+        nodes: ${REDIS_SENTINEL_NODES:127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381}

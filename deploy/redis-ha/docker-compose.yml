@@ -1,0 +1,108 @@
+# =====================================================================
+# Redis 主从 + 哨兵（Sentinel）高可用编排：1 主 1 从 3 哨兵
+#
+# 用法：
+#   cd deploy/redis-ha
+#   docker compose up -d
+#   docker compose ps
+#   docker compose down -v      # 停止并清空数据
+#
+# 密码通过环境变量覆盖（默认 redispass，仅演示用，生产请改）：
+#   REDIS_PASSWORD=yourpass docker compose up -d
+#
+# 架构说明：
+# - 1 主 1 从：主写从读，主节点故障后由哨兵提升从节点为新主；
+# - 3 哨兵（奇数 + quorum=2）：任一哨兵宕机不影响选主，避免单哨兵脑裂；
+# - 哨兵只解决 Redis 单点问题，不解决"哨兵集群整体不可用"，后者由应用侧 fail-open 兜底。
+# =====================================================================
+
+name: redis-ha
+
+x-sentinel: &sentinel
+  image: redis:7-alpine
+  restart: unless-stopped
+  depends_on:
+    - redis-master
+    - redis-replica
+  # 容器内统一监听 26379，宿主侧分别映射到 26379 / 26380 / 26381。
+  # 配置写到 /data（命名卷，可写）再启动，因为哨兵运行中会重写配置文件记录主从状态。
+  command: >
+    sh -c "printf '%s\n'
+    'port 26379'
+    'dir /data'
+    'sentinel monitor mymaster redis-master 6379 2'
+    'sentinel auth-pass mymaster ${REDIS_PASSWORD:-redispass}'
+    'sentinel down-after-milliseconds mymaster 5000'
+    'sentinel failover-timeout mymaster 60000'
+    'sentinel parallel-syncs mymaster 1'
+    > /data/sentinel.conf && exec redis-sentinel /data/sentinel.conf"
+
+services:
+  redis-master:
+    image: redis:7-alpine
+    container_name: redis-ha-master
+    restart: unless-stopped
+    command: >
+      redis-server
+      --port 6379
+      --requirepass ${REDIS_PASSWORD:-redispass}
+      --masterauth ${REDIS_PASSWORD:-redispass}
+      --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - master-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redispass}", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis-replica:
+    image: redis:7-alpine
+    container_name: redis-ha-replica
+    restart: unless-stopped
+    command: >
+      redis-server
+      --port 6379
+      --requirepass ${REDIS_PASSWORD:-redispass}
+      --masterauth ${REDIS_PASSWORD:-redispass}
+      --appendonly yes
+      --replicaof redis-master 6379
+    ports:
+      - "6380:6379"
+    volumes:
+      - replica-data:/data
+    depends_on:
+      - redis-master
+
+  sentinel-1:
+    <<: *sentinel
+    container_name: redis-ha-sentinel-1
+    ports:
+      - "26379:26379"
+    volumes:
+      - sentinel-1-data:/data
+
+  sentinel-2:
+    <<: *sentinel
+    container_name: redis-ha-sentinel-2
+    ports:
+      - "26380:26379"
+    volumes:
+      - sentinel-2-data:/data
+
+  sentinel-3:
+    <<: *sentinel
+    container_name: redis-ha-sentinel-3
+    ports:
+      - "26381:26379"
+    volumes:
+      - sentinel-3-data:/data
+
+volumes:
+  master-data:
+  replica-data:
+  sentinel-1-data:
+  sentinel-2-data:
+  sentinel-3-data:

@@ -46,11 +46,9 @@ spring:
           max-idle: 8
           min-idle: 0
       # ---- 生产环境高可用（可选）：Redis 主从 + 哨兵 Sentinel ----
-      # 启用哨兵时注释掉上面的 host/port，改用下面的 sentinel 配置：
-      # Lettuce 会通过哨兵发现主节点，主节点故障自动切换后自动重连，减少 Redis 单点宕机风险。
-      # sentinel:
-      #   master: mymaster
-      #   nodes: 127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381
+      # 本文件保持单机配置；启用哨兵请激活 profile：--spring.profiles.active=redis-ha
+      # 对应配置见 application-redis-ha.yml（sentinel.master + nodes，host/port 自动失效）。
+      # 编排文件：deploy/redis-ha/docker-compose.yml（1 主 1 从 3 哨兵）。
       #
       # 降级取舍：哨兵只解决"单点"问题。若哨兵集群整体不可用，RedisUtil 的所有方法都会 fail-open
       # （get 返回 null、set 忽略异常），JWT 鉴权退化为"仅校验签名 + 有效期放行"，

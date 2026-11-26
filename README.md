@@ -386,48 +386,60 @@ logging:
 - 主节点故障时由哨兵自动选举新主，Lettuce 通过哨兵重新发现主节点并重连，消除 Redis 单点风险；
 - 哨兵节点无状态，建议部署在不同机器。
 
-### docker-compose 示例
+### 1. 启动哨兵集群
 
-```yaml
-services:
-  redis-master:
-    image: redis:7
-    command: ["redis-server", "--requirepass", "yourpass", "--masterauth", "yourpass"]
-    ports: ["6379:6379"]
+编排文件：[deploy/redis-ha/docker-compose.yml](deploy/redis-ha/docker-compose.yml)，1 主 1 从 3 哨兵，密码默认 `redispass`（可用 `REDIS_PASSWORD` 覆盖）：
 
-  redis-replica:
-    image: redis:7
-    command: ["redis-server", "--replicaof", "redis-master", "6379",
-              "--requirepass", "yourpass", "--masterauth", "yourpass"]
-
-  sentinel-1: &sentinel
-    image: redis:7
-    ports: ["26379:26379"]
-    command: >
-      sh -c "printf 'port 26379\nsentinel monitor mymaster redis-master 6379 2\nsentinel auth-pass mymaster yourpass\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 60000\n' > /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"
-
-  sentinel-2:
-    <<: *sentinel
-    ports: ["26380:26379"]
-
-  sentinel-3:
-    <<: *sentinel
-    ports: ["26381:26379"]
+```bash
+cd deploy/redis-ha
+docker compose up -d
+docker compose ps          # 5 个容器均为 running
 ```
 
-### 后端接入
+### 2. 后端接入哨兵
 
-`application.yml` 中启用哨兵（**不要再配 `host`/`port`**，Lettuce 会通过哨兵发现主节点）：
+使用 [application-redis-ha.yml](src/main/resources/application-redis-ha.yml) 激活 `redis-ha` profile：
 
-```yaml
-spring:
-  data:
-    redis:
-      password: ${REDIS_PASSWORD:}
-      sentinel:
-        master: mymaster
-        nodes: 127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381
+```bash
+# 本地（哨兵映射在 127.0.0.1:26379-26381）
+./mvnw spring-boot:run "-Dspring-boot.run.profiles=redis-ha"
+
+# 生产（哨兵部署在独立服务器时用环境变量覆盖）
+REDIS_SENTINEL_NODES=10.0.0.1:26379,10.0.0.2:26379,10.0.0.3:26379 \
+REDIS_PASSWORD=yourpass \
+java -jar target/ai-marking-system-0.0.1-SNAPSHOT.jar --spring.profiles.active=redis-ha
 ```
+
+哨兵模式下 `host`/`port` 不再生效，Lettuce 从哨兵获取当前主节点地址，故障转移后自动重连。
+
+### 3. 验证故障转移
+
+```bash
+# ① 查看当前主节点地址（应指向 redis-master 容器）
+docker exec redis-ha-sentinel-1 redis-cli -p 26379 sentinel get-master-addr-by-name mymaster
+
+# ② 模拟主节点宕机
+docker stop redis-ha-master
+
+# ③ 等待 5~15 秒（down-after-milliseconds=5000），再次查询，地址应变为副本
+docker exec redis-ha-sentinel-1 redis-cli -p 26379 sentinel get-master-addr-by-name mymaster
+
+# ④ 新主可写；旧主重启后应降级为从节点
+docker exec redis-ha-replica redis-cli -a redispass SET probe ok
+docker start redis-ha-master && sleep 10
+docker exec redis-ha-master redis-cli -a redispass ROLE      # 输出 slave 表示已降级
+
+# 验证完成后清理
+cd deploy/redis-ha && docker compose down -v
+```
+
+### 4. 环境限制（重要）
+
+| 部署形态 | 能否直接完成端到端验证 |
+| --- | --- |
+| Redis 直接装在宿主机（生产常见） | 可以，`REDIS_SENTINEL_NODES` 指向真实地址即可 |
+| 后端与 Redis 同在 Docker 网络 | 可以，节点地址用容器服务名 |
+| Windows Docker Desktop + 宿主跑后端 | 只能验证"哨兵选主"；落主返回的是容器 IP，WSL2 NAT 下宿主不可达，端到端自动重连请在 Linux / WSL2 内验证 |
 
 ### 故障边界与 fail-open 取舍
 
