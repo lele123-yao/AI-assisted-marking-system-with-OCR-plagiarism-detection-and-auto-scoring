@@ -10,7 +10,7 @@
 
 | 服务 | 命令 / 说明 |
 | --- | --- |
-| MySQL | 已装服务，库 `ai_marking`，账号 `root / 20060302` |
+| MySQL | 已装服务，库 `ai_marking`，账号 `root / root`（默认，可用 `DB_PASSWORD` 覆盖） |
 | Redis | 可不启动（失败会自动跳过，不影响登录） |
 | RabbitMQ | **AI 异步阅卷必需**，需启动，端口 5672 |
 | 后端 | `cd d:\ai-marking-system` → `.\mvnw.cmd spring-boot:run`，等 8080 就绪 |

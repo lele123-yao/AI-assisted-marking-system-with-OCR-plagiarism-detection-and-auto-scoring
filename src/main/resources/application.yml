@@ -11,7 +11,9 @@ spring:
     # 全部支持环境变量覆盖，别人克隆仓库后无需改代码即可接入自己的本地环境
     url: ${DB_URL:jdbc:mysql://localhost:3306/ai_marking?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:20060302}
+    # 默认 root / root，避免把个人密码提交到公开仓库；
+    # 本地密码不同时设置环境变量 DB_PASSWORD，或用 sql/reset-mysql-password.ps1 重置为 root
+    password: ${DB_PASSWORD:root}
     hikari:
       # 连接池最大/最小连接数，按需调整
       maximum-pool-size: 10
