@@ -5,9 +5,11 @@
 --   1. 补齐全部 13 张业务表（已存在的表会自动补缺失列，不破坏现有数据）；
 --   2. 写入基础角色（ADMIN/TEACHER/STUDENT）与默认管理员账号；
 --   3. 管理员账号：admin / 123456（密码为与后端 BCryptPasswordEncoder 一致的哈希）。
--- 执行方式：mysql -uroot -p ai_marking < init_schema.sql
+-- 执行方式：mysql -uroot -p < init_schema.sql
 -- =====================================================================
 
+-- 首次在新机器上执行时库还不存在，必须先建库；已存在则跳过（幂等）
+CREATE DATABASE IF NOT EXISTS ai_marking DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE ai_marking;
 SET NAMES utf8mb4;
 
