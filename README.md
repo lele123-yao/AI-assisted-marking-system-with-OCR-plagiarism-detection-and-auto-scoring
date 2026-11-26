@@ -378,6 +378,73 @@ logging:
 
 ---
 
+## 🧭 Redis 高可用（主从 + 哨兵）
+
+默认配置是单机 Redis（`localhost:6379`），满足开发与演示。生产环境建议使用 **主从 + 哨兵**：
+
+- **1 主 1 从 + 3 哨兵**，哨兵必须为奇数且至少 3 个（`quorum=2`），避免脑裂；
+- 主节点故障时由哨兵自动选举新主，Lettuce 通过哨兵重新发现主节点并重连，消除 Redis 单点风险；
+- 哨兵节点无状态，建议部署在不同机器。
+
+### docker-compose 示例
+
+```yaml
+services:
+  redis-master:
+    image: redis:7
+    command: ["redis-server", "--requirepass", "yourpass", "--masterauth", "yourpass"]
+    ports: ["6379:6379"]
+
+  redis-replica:
+    image: redis:7
+    command: ["redis-server", "--replicaof", "redis-master", "6379",
+              "--requirepass", "yourpass", "--masterauth", "yourpass"]
+
+  sentinel-1: &sentinel
+    image: redis:7
+    ports: ["26379:26379"]
+    command: >
+      sh -c "printf 'port 26379\nsentinel monitor mymaster redis-master 6379 2\nsentinel auth-pass mymaster yourpass\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 60000\n' > /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf"
+
+  sentinel-2:
+    <<: *sentinel
+    ports: ["26380:26379"]
+
+  sentinel-3:
+    <<: *sentinel
+    ports: ["26381:26379"]
+```
+
+### 后端接入
+
+`application.yml` 中启用哨兵（**不要再配 `host`/`port`**，Lettuce 会通过哨兵发现主节点）：
+
+```yaml
+spring:
+  data:
+    redis:
+      password: ${REDIS_PASSWORD:}
+      sentinel:
+        master: mymaster
+        nodes: 127.0.0.1:26379,127.0.0.1:26380,127.0.0.1:26381
+```
+
+### 故障边界与 fail-open 取舍
+
+| 场景 | 表现 |
+| --- | --- |
+| 主节点宕机 | 哨兵自动选主，Lettuce 重连；切换的数秒内读取失败会短暂降级，恢复后自动回到严格校验 |
+| 单个哨兵宕机 | 其余哨兵继续工作（quorum=2），无影响 |
+| 哨兵集群整体不可用 | 进入 fail-open：仅校验 JWT 签名与有效期放行，**登出 / 顶号踢下线能力失效** |
+
+哨兵只解决"单点"问题。哨兵全挂时 `RedisUtil` 的所有操作都会 fail-open（`get` 返回 null、`set` 忽略异常），JWT 鉴权退化为纯无状态模式。这是**可用性优先于强一致性**的取舍：降级期间已登出的旧 token 在自身过期前（默认 30 分钟）仍可能通过鉴权，因此生产环境不要把 JWT 过期时间设得过长，并对改密码、删数据等高危操作增加二次校验。相关取舍已在 [JwtAuthenticationFilter.java](src/main/java/com/marking/aimarkingsystem/common/security/JwtAuthenticationFilter.java) 与 `application.yml` 注释中写明。
+
+> 若业务要求"登出必须绝对即时生效"，则需要把 Redis 改为强依赖（fail-close），代价是 Redis 故障时全站请求 401。
+>
+> 另外 Redis 还承载登录态、接口限流、分布式锁，Redis 整体不可用时这些能力会一并降级（限流放行、锁放行），不影响主流程可用性。
+
+---
+
 ## 🔑 默认账号
 
 | 用户名 | 密码 | 角色 | 侧栏菜单 |

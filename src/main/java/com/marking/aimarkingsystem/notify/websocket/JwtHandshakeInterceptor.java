@@ -73,7 +73,9 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
             return false;
         }
 
-        // 单账号单会话：与 HTTP 一致，旧 token 被新登录挤掉后不允许再建连
+        // 单账号单会话：与 HTTP 一致，旧 token 被新登录挤掉后不允许再建连。
+        // 与 JwtAuthenticationFilter 相同的降级取舍：Redis（主从+哨兵）整体不可用时 get 返回 null，
+        // 此时只校验 JWT 签名与有效期放行，握手不再具备"踢下线"能力。
         String currentToken = redisUtil.get(RedisKeyConstant.LOGIN_TOKEN + username);
         if (currentToken != null && !currentToken.equals(token)) {
             log.info("WebSocket 握手被拒绝：token 已失效（被新登录挤掉或已退出）: username={}", username);

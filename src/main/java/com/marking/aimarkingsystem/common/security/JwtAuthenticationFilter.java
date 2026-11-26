@@ -39,6 +39,19 @@ import java.util.stream.Collectors;
  * 4. 后续的授权判断（如 PermissionAspect、authorizeHttpRequests）从这里取身份。
  *
  * 注意：本过滤器不负责"登录"，它只负责"带着 token 来的请求是谁"。
+ *
+ * <h3>高可用与降级取舍（生产环境）</h3>
+ * 生产环境推荐 Redis 主从 + 哨兵（Sentinel）架构：主节点故障时哨兵自动选举新主，
+ * Lettuce 通过哨兵重新发现主节点并重连，避免 Redis 单点宕机导致登录态校验整体不可用。
+ * <p>
+ * 但哨兵只解决"单点"问题：如果哨兵集群整体不可用（全部宕机或网络隔离），
+ * 本过滤器会进入 fail-open 降级——RedisUtil.get 捕获异常后返回 null，
+ * 此时只校验 JWT 签名与有效期即放行请求。
+ * <p>
+ * 取舍说明（可用性优先于强一致性）：
+ * 降级期间"登出立即失效 / 后登录挤掉先登录"能力失效，已登出的旧 token 在自身过期前仍可通过鉴权；
+ * 因此生产环境不要把 JWT 过期时间设得过长（当前默认 30 分钟），
+ * 并对改密码、删除等高风险操作增加二次校验。
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -78,6 +91,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // - Redis 可用时，登录会覆盖写入，旧 token 比对不通过 → 立即失效（后登录挤掉先登录）；
                 // - Redis 不可用 / 降级模式时 redisUtil.get 返回 null，此时信任 JWT 本身的签名与有效期
                 //   （前面已通过 jwtUtil.validateToken 校验），保证无 Redis 也能正常鉴权。
+                //
+                // 高可用说明：
+                // 1. 生产环境用 Redis 主从 + 哨兵，主节点故障由哨兵自动切换，Lettuce 发现新主后自动重连，
+                //    切换窗口内的 get 失败会短暂降级为下面第 2 点的 fail-open，恢复后自动回到严格比对；
+                // 2. 哨兵集群整体不可用时同样走 fail-open：仅校验签名与有效期放行，
+                //    代价是"踢下线 / 单账号单会话"失效（见类注释中的取舍说明）。
                 String currentToken = redisUtil.get(RedisKeyConstant.LOGIN_TOKEN + username);
                 if (currentToken != null && !token.equals(currentToken)) {
                     log.info("token 已失效（被新登录挤掉或已退出登录）: username={}", username);
